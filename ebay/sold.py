@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-techndev-providers  ebay/sold.py  v1.0.0
+techndev-providers  ebay/sold.py  v1.1.0
 =========================================
 eBay Marketplace Insights API — verkaufte Angebote (Terapeak-Aequivalent).
 Endpoint: GET /buy/marketplace_insights/v1_beta/item_sales/search
@@ -10,6 +10,12 @@ Voraussetzung: eBay Developer Account mit Marketplace Insights Freischaltung
 
 CHANGELOG
 ---------
+v1.1.0  (2026-05-25)
+  - Scraper-Fallback: bei Token HTTP 400/403 (Marketplace Insights nicht freigeschaltet)
+    oder API HTTP 403 wird scraper.scrape_sold() als Fallback aufgerufen.
+    Transparente Rueckgabe — gleicher Tuple wie API-Pfad.
+    Neuer Parameter scrape_fallback=True (False = altes Verhalten ohne Fallback).
+
 v1.0.0  (2026-05-25)
   - search_sold(): Suche nach verkauften Sofort-Kaufen-Neu-Angeboten via GTIN
     oder Freitext. Gibt SoldResult-kompatible Daten zurueck.
@@ -19,14 +25,13 @@ v1.0.0  (2026-05-25)
 """
 from __future__ import annotations
 
-import sys
-
 import requests
 
-from ._auth  import get_token, is_gtin, api_base, SCOPE_SOLD
+from ._auth   import get_token, is_gtin, api_base, SCOPE_SOLD
 from ._models import SoldItem, _price_stats, now_iso
+from .scraper import scrape_sold
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Standard-Filter: Sofort-Kaufen (kein Auktionschaos) + Zustand Neu (conditionId 1000)
 _DEFAULT_FILTER = "buyingOptions:{FIXED_PRICE},conditionIds:{1000}"
@@ -35,27 +40,30 @@ TIMEOUT = 30
 
 
 def search_sold(
-    query:          str,
-    credentials:    dict,
-    marketplace:    str = "EBAY_DE",
-    limit:          int = 50,
-    new_only:       bool = True,
+    query:            str,
+    credentials:      dict,
+    marketplace:      str  = "EBAY_DE",
+    limit:            int  = 50,
+    new_only:         bool = True,
     fixed_price_only: bool = True,
+    scrape_fallback:  bool = True,
 ) -> tuple[int | None, list[SoldItem], str | None]:
     """
     Sucht nach verkauften eBay-Angeboten via Marketplace Insights API.
+    Bei HTTP 400/403 (Scope nicht freigeschaltet): Fallback auf Scraper.
 
-    query:        EAN/GTIN oder Freitext-Suchbegriff.
-    credentials:  {'client_id': ..., 'client_secret': ..., 'env': 'production'}.
-    marketplace:  eBay-Marketplace-ID (Default: 'EBAY_DE').
-    limit:        Max. Ergebnisse (1-200, API-Limit).
-    new_only:     Nur Zustand Neu (conditionId 1000).
+    query:            EAN/GTIN oder Freitext-Suchbegriff.
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}.
+    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
+    limit:            Max. Ergebnisse (1-200, API-Limit).
+    new_only:         Nur Zustand Neu (conditionId 1000).
     fixed_price_only: Nur Sofort-Kaufen (FIXED_PRICE).
+    scrape_fallback:  Bei API-Sperre Fallback auf HTML-Scraper (Default: True).
 
     Rueckgabe: (total, items, error_or_None)
-      total: Gesamtanzahl laut API (kann > len(items) sein).
+      total: Gesamtanzahl laut API/Scraper (kann > len(items) sein).
       items: Geparste SoldItem-Liste.
-      error: None = OK; str = Fehlermeldung (Abruf misslungen, keine Exception).
+      error: None = OK; str = Fehlermeldung (beide Pfade gescheitert).
     """
     client_id     = credentials["client_id"]
     client_secret = credentials["client_secret"]
@@ -64,7 +72,13 @@ def search_sold(
     try:
         token = get_token(client_id, client_secret, scope=SCOPE_SOLD, env=env)
     except requests.HTTPError as e:
-        return None, [], f"Token-Fehler (Marketplace Insights): HTTP {e.response.status_code if e.response is not None else '?'} — Scope evtl. nicht freigeschaltet"
+        code = e.response.status_code if e.response is not None else "?"
+        if scrape_fallback and code in (400, 403):
+            return scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
+        return None, [], (
+            f"Token-Fehler (Marketplace Insights): HTTP {code} "
+            f"— Scope evtl. nicht freigeschaltet"
+        )
     except Exception as e:
         return None, [], f"Token-Fehler: {e}"
 
@@ -101,6 +115,8 @@ def search_sold(
             timeout=TIMEOUT,
         )
         if resp.status_code == 403:
+            if scrape_fallback:
+                return scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
             return None, [], "HTTP 403 — Marketplace Insights nicht freigeschaltet (Business Approval erforderlich)"
         resp.raise_for_status()
     except requests.HTTPError as e:

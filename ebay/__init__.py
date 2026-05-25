@@ -1,16 +1,18 @@
 """
-techndev-providers  ebay  v1.0.0
+techndev-providers  ebay  v1.1.0
 ==================================
 eBay Datenprovider: Marktpreise (aktive Angebote) + Sell-Through (verkaufte Angebote).
 
 Auth:   OAuth 2.0 Application Token (Client Credentials) — kein User-Token noetig.
 APIs:   Browse API (aktive Listings) + Marketplace Insights API (verkaufte Listings).
+        Fallback: HTML-Scraper fuer abgeschlossene Listings wenn Insights gesperrt.
 
 Exports:
   SoldItem, ActiveItem, MarketSnapshot  — Datenklassen
   get_market_snapshot()                 — Kombinierter Haupt-Einstiegspunkt
-  search_sold()                         — Nur verkaufte Angebote
-  search_active()                       — Nur aktive Angebote
+  search_sold()                         — Nur verkaufte Angebote (API + Scraper-Fallback)
+  search_active()                       — Nur aktive Angebote (Browse API)
+  scrape_sold()                         — Nur Scraper (direkt, ohne API-Versuch)
   get_token()                           — OAuth-Token direkt
   SCOPE_BASIC, SCOPE_SOLD               — Scope-Konstanten
 
@@ -24,13 +26,14 @@ Credentials-Format:
 Hinweis Marketplace Insights:
   Fuer verkaufte Angebote ist der Scope buy.marketplace.insights erforderlich,
   der eine separate eBay-Business-Genehmigung erfordert.
-  Bei HTTP 403 liefert get_market_snapshot() graceful degradation:
-  sold_error ist gesetzt, active_* sind trotzdem befuellt.
+  Bei HTTP 400/403 greift automatisch der HTML-Scraper als Fallback (scrape_fallback=True).
+  Scraper: https://www.ebay.<tld>/sch/i.html?LH_Sold=1&LH_Complete=1
 """
-from ._models import SoldItem, ActiveItem, MarketSnapshot, now_iso, _price_stats, _calc_str
-from ._auth   import get_token, SCOPE_BASIC, SCOPE_SOLD
-from .sold    import search_sold
-from .browse  import search_active
+from ._models  import SoldItem, ActiveItem, MarketSnapshot, now_iso, _price_stats, _calc_str
+from ._auth    import get_token, SCOPE_BASIC, SCOPE_SOLD
+from .sold     import search_sold
+from .browse   import search_active
+from .scraper  import scrape_sold
 
 __all__ = [
     "SoldItem",
@@ -39,11 +42,12 @@ __all__ = [
     "get_market_snapshot",
     "search_sold",
     "search_active",
+    "scrape_sold",
     "get_token",
     "SCOPE_BASIC",
     "SCOPE_SOLD",
 ]
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 def get_market_snapshot(
@@ -53,26 +57,32 @@ def get_market_snapshot(
     limit:            int  = 50,
     new_only:         bool = True,
     fixed_price_only: bool = True,
+    scrape_fallback:  bool = True,
 ) -> MarketSnapshot:
     """
     Kombinierter eBay-Markt-Snapshot: ruft sold + active nacheinander ab.
     Jede Seite wird unabhaengig abgerufen — Fehler einer Seite
     beeinflussen die andere nicht (graceful degradation).
 
-    query:        EAN (z.B. '4010232075488') oder Freitext ('LEGO 10294').
-    credentials:  {'client_id': ..., 'client_secret': ..., 'env': 'production'}.
-    marketplace:  eBay-Marketplace-ID (Default: 'EBAY_DE').
-    limit:        Max. Ergebnisse pro Seite (1-200).
-    new_only:     Nur Zustand Neu.
+    Bei gesperrtem Marketplace Insights (HTTP 400/403) greift automatisch
+    der HTML-Scraper fuer verkaufte Listings (scrape_fallback=True).
+
+    query:            EAN (z.B. '4010232075488') oder Freitext ('LEGO 10294').
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}.
+    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
+    limit:            Max. Ergebnisse pro Seite (1-200).
+    new_only:         Nur Zustand Neu.
     fixed_price_only: Nur Sofort-Kaufen.
+    scrape_fallback:  Scraper als Fallback wenn Insights nicht verfuegbar (Default: True).
 
     Rueckgabe: MarketSnapshot mit sold_*/active_* + sell_through_rate.
     """
     ts = now_iso()
 
-    # ── Verkaufte Angebote (Marketplace Insights) ──────────────────────────────
+    # ── Verkaufte Angebote (Marketplace Insights → Scraper-Fallback) ──────────
     sold_total, sold_items, sold_error = search_sold(
-        query, credentials, marketplace, limit, new_only, fixed_price_only
+        query, credentials, marketplace, limit, new_only, fixed_price_only,
+        scrape_fallback=scrape_fallback,
     )
     sold_prices = [i.price for i in sold_items if i.price is not None]
     sold_med, sold_mean, sold_min, sold_max = _price_stats(sold_prices)
