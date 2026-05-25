@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-techndev-providers  ebay/scraper.py  v1.0.0
+techndev-providers  ebay/scraper.py  v1.2.0
 =============================================
 eBay-Scraper fuer abgeschlossene (verkaufte) Listings.
 Fallback wenn Marketplace Insights API (buy.marketplace.insights) nicht
@@ -16,19 +16,22 @@ Nur fuer eigene Recherche / nicht-kommerziellen Eigengebrauch.
 
 CHANGELOG
 ---------
+v1.2.0  (2026-05-25)
+  - Parser auf aktuelles eBay-HTML umgestellt: Klasse s-card (war s-item),
+    Preis in s-card__price, Titel in s-card__title, Datum aus
+    aria-label="Verkaufter Artikel". URL-Filter erkennt Sponsored-Items
+    (ebay.com ohne www → kein Match → automatisch ausgefiltert).
+  - _is_challenge(): erkennt Akamai-Bot-Challenge-Seite (< 100 KB + Keyword).
+    Bei Challenge: Session-Reset + 1 Retry; danach klar benannter Fehler.
+
 v1.1.0  (2026-05-25)
   - Session-Cache pro Domain: erst Homepage besuchen (immer 200) fuer
     Akamai-Session-Cookies (dp1/nonsession/s/ds2/ebay), dann Suche.
     Loest HTTP 403 von Akamai-WAF auf /sch/i.html fuer DataCenter-IPs.
     Bei erneutem 403: Session-Neuinitialisierung + 1 Retry.
-    _get_session(domain) verwaltet gecachte Sessions pro Domain.
 
 v1.0.0  (2026-05-25)
-  - scrape_sold(): Abgeschlossene Listings scraepen, kompatibel zu search_sold().
-  - HTML-Parsing: Preis (DE+EN Format), Titel, Item-URL, Item-ID.
-    Sold-Datum: Best-Effort — aus statischem HTML nicht zuverlaessig extrahierbar.
-  - Gesamtanzahl: JSON-Blob-Suche -> Ergebnistext-Regex -> None als Fallback.
-  - Marketplace-Domain-Map: EBAY_DE/AT/US/UK/FR/IT/ES/NL/BE/PL/AU/CA.
+  - Initiales Release: scrape_sold(), HTML-Parsing, Domain-Map.
 """
 from __future__ import annotations
 
@@ -38,7 +41,7 @@ import requests
 
 from ._models import SoldItem
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 TIMEOUT = 30
 
@@ -92,9 +95,24 @@ def _get_session(domain: str) -> requests.Session:
         _sessions[domain] = session
     return _sessions[domain]
 
-# ── Parse-Regexes ──────────────────────────────────────────────────────────────
 
-# Gesamtanzahl: JSON-Einbettung (zuverlaessiger) — "totalItems":"3456" / "totalItems":3456
+# ── Challenge-Erkennung ───────────────────────────────────────────────────────
+# Akamai Bot Manager serviert bei verdaechtigen Sessions eine ~13KB-Seite mit
+# dem Titel "Bitte entschuldigen Sie die Störung" statt der eigentlichen Seite.
+_CHALLENGE_MARKER = 'entschuldigen'   # DE-Challenge
+_CHALLENGE_SIZE   = 100_000           # Echte Ergebnisseiten sind immer > 100 KB
+
+
+def _is_challenge(resp: requests.Response) -> bool:
+    """True wenn eBay eine Bot-Challenge-Seite statt Ergebnisse geliefert hat."""
+    if len(resp.content) < _CHALLENGE_SIZE:
+        return _CHALLENGE_MARKER in resp.text or 'splash' in resp.url.lower()
+    return False
+
+
+# ── Parse-Regexes (eBay-HTML Stand 2026-05) ───────────────────────────────────
+
+# Gesamtanzahl: JSON-Einbettung (zuverlaessiger) — "totalItems":"3456"
 _RE_TOTAL_JSON = re.compile(r'"totalItems"\s*:\s*"?(\d+)"?')
 # Gesamtanzahl: sichtbarer Ergebnistext DE/EN
 _RE_TOTAL_TEXT = re.compile(
@@ -102,41 +120,37 @@ _RE_TOTAL_TEXT = re.compile(
     re.IGNORECASE,
 )
 
-# Preis im s-item__price-Element.
-# Erkennt: "EUR 149,99" / "149,99 EUR" / "$ 149.99" / "149.99" / "1.299,99"
+# Preis: class="... s-card__price">EUR 229,00
+# Erkennt: "EUR 229,00" / "229,00 EUR" / "EUR 1.299,00"
 _RE_PRICE = re.compile(
-    r'class="[^"]*\bs-item__price\b[^"]*"[^>]*>'
-    r'\s*(?:[€$£]\s*|(?:EUR|USD|GBP|CHF|PLN|AUD|CAD)\s*)?'
+    r's-card__price[^>]*>\s*(?:EUR\s*|USD\s*|GBP\s*|CHF\s*)?'
     r'([\d][0-9.,]+)',
     re.IGNORECASE,
 )
 
-# Titel im s-item__title-Element (h3 oder div oder span)
+# Titel: class=s-card__title (unquoted attribute eBay-spezifisch)
+# Inhalt ist ein <span> mit dem tatsaechlichen Text
 _RE_TITLE = re.compile(
-    r'class="[^"]*\bs-item__title\b[^"]*"[^>]*>(.*?)</(?:h3|div|span)\b',
+    r'class=s-card__title[^>]*>(.*?)</div>',
     re.DOTALL | re.IGNORECASE,
 )
 
-# Item-URL (ebay.<tld>/itm/<id>)
+# Item-URL: href=https://www.ebay.de/itm/XXXXXXXX
+# Sponsored Items nutzen ebay.com ohne www → kein Match → automatisch gefiltert
 _RE_URL = re.compile(
-    r'href="(https://www\.ebay\.[^/\s"]+/itm/(\d+))[^"]*"',
+    r'href=(https://www\.ebay\.[^/\s"\']+/itm/(\d+))',
+    re.IGNORECASE,
+)
+
+# Verkaufsdatum: aria-label="Verkaufter Artikel">Verkauft  24. Mai 2026
+_RE_SOLD_DATE = re.compile(
+    r'aria-label="Verkaufter\s+Artikel"[^>]*>\s*Verkauft\s+'
+    r'(\d{1,2}\.\s+\w+\s+\d{4})',
     re.IGNORECASE,
 )
 
 # HTML-Tags entfernen
 _RE_TAGS = re.compile(r'<[^>]+>')
-
-# Datum im Block — Best-Effort: "20. Mai 2026" (DE) oder "May 20, 2026" (EN)
-# oder ISO-aehnlich "2026-05-20"
-_RE_DATE_DE  = re.compile(
-    r'\b(\d{1,2}\.\s*(?:Jan|Feb|M[äa]r|Apr|Mai|Jun|Jul|Aug|Sep|Okt|Nov|Dez)[a-z]*\.?\s+\d{4})\b',
-    re.IGNORECASE,
-)
-_RE_DATE_EN  = re.compile(
-    r'\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b',
-    re.IGNORECASE,
-)
-_RE_DATE_ISO = re.compile(r'\b(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}:\d{2})?\b')
 
 
 def scrape_sold(
@@ -156,7 +170,6 @@ def scrape_sold(
     fixed_price_only: Nur Sofort-Kaufen (LH_BIN=1).
 
     Rueckgabe: (total, items, error_or_None) — identisch zu search_sold().
-    sold_date ist leer-String (nicht zuverlaessig aus statischem HTML extrahierbar).
     """
     domain = _DOMAINS.get(marketplace.upper(), 'www.ebay.de')
 
@@ -175,8 +188,8 @@ def scrape_sold(
     session = _get_session(domain)
     try:
         resp = session.get(url, params=params, timeout=TIMEOUT)
-        if resp.status_code == 403:
-            # Session abgelaufen oder Cookie ungueltig: neu initialisieren + 1 Retry
+        if resp.status_code == 403 or _is_challenge(resp):
+            # Session invalide oder Akamai-Challenge → Session-Reset + 1 Retry
             _sessions.pop(domain, None)
             session = _get_session(domain)
             resp = session.get(url, params=params, timeout=TIMEOUT)
@@ -186,6 +199,9 @@ def scrape_sold(
         return None, [], f"Scraper HTTP {code}"
     except requests.RequestException as e:
         return None, [], f"Scraper Netzwerkfehler: {e}"
+
+    if _is_challenge(resp):
+        return None, [], "Scraper: eBay Bot-Challenge nicht umgehbar (Session invalide)"
 
     html  = resp.text
     total = _parse_total(html)
@@ -206,7 +222,6 @@ def _parse_total(html: str) -> int | None:
     m = _RE_TOTAL_TEXT.search(html)
     if m:
         try:
-            # "1.234" (DE) oder "1,234" (EN) → 1234
             return int(m.group(1).replace('.', '').replace(',', ''))
         except ValueError:
             pass
@@ -214,83 +229,68 @@ def _parse_total(html: str) -> int | None:
 
 
 def _parse_price(block: str) -> float | None:
-    """Preis aus einem Item-HTML-Block. Gibt None bei fehlender/unplausibler Zahl."""
+    """Preis aus einem Item-HTML-Block (s-card__price). None bei unplausiblem Wert."""
     m = _RE_PRICE.search(block)
     if not m:
         return None
     raw = m.group(1)
     # DE-Format: 1.299,99 → 1299.99  |  EN-Format: 1,299.99 → 1299.99
-    # Heuristik: wenn letztes Trennzeichen ein Komma, ist es DE-Format
     if ',' in raw and '.' in raw:
-        # Bsp: "1.299,99" → Punkt = Tausender, Komma = Dezimal
         if raw.rfind(',') > raw.rfind('.'):
-            raw = raw.replace('.', '').replace(',', '.')
+            raw = raw.replace('.', '').replace(',', '.')   # DE: Komma = Dezimal
         else:
-            # Bsp: "1,299.99" → Komma = Tausender, Punkt = Dezimal
-            raw = raw.replace(',', '')
+            raw = raw.replace(',', '')                      # EN: Komma = Tausender
     elif ',' in raw:
-        # Nur Komma → DE-Dezimalzeichen: "149,99" → "149.99"
-        raw = raw.replace(',', '.')
-    # Nur Punkt → normale EN-Schreibweise, unveraendert lassen
+        raw = raw.replace(',', '.')   # Nur Komma → DE-Dezimal
     try:
         price = float(raw)
     except ValueError:
         return None
-    # Plausibilitaetscheck: Preise zwischen 0,01 und 1 Mio.
     return price if 0.01 <= price <= 1_000_000 else None
-
-
-def _parse_date(block: str) -> str:
-    """Verkaufsdatum aus Item-Block — Best-Effort, leerer String wenn nicht gefunden."""
-    for pattern in (_RE_DATE_ISO, _RE_DATE_DE, _RE_DATE_EN):
-        m = pattern.search(block)
-        if m:
-            return m.group(1).strip()
-    return ''
-
-
-def _clean_title(raw_html: str) -> str:
-    """HTML-Tags entfernen + eBay-Standardfuelltext bereinigen."""
-    text = _RE_TAGS.sub('', raw_html).strip()
-    for noise in ('Neuer Artikel', 'New Listing', 'SPONSORED', 'Anzeige'):
-        text = text.replace(noise, '').strip()
-    return text or '-'
 
 
 def _parse_items(html: str) -> list[SoldItem]:
     """
-    Parst alle s-item-Bloecke aus dem HTML.
-    Strategie: Auftrennen an <li-Grenzen mit 's-item'-Klasse,
-    dann je Block Preis + Titel + URL extrahieren.
+    Parst alle s-card-Bloecke aus dem HTML.
+    Split an <li class="s-card"-Grenzen; je Block Preis/Titel/URL/Datum extrahieren.
+    Sponsored Items (URL ohne www → kein _RE_URL-Match) werden automatisch gefiltert.
     """
-    # Aufteilen am Start jedes Item-Tags — vermeidet verschachtelte-Tag-Probleme
-    parts = re.split(r'(?=<li\b[^>]*\bclass="[^"]*\bs-item\b)', html, flags=re.IGNORECASE)
+    # Aufteilen am Start jedes s-card-Tags
+    parts = re.split(r'(?=<li\b[^>]*\bclass="s-card\b)', html, flags=re.IGNORECASE)
 
     items: list[SoldItem] = []
-    for block in parts[1:]:   # parts[0] ist alles vor dem ersten Item
-        # URL + Item-ID (Pflichtfeld — ohne ID wird Eintrag verworfen)
+    for block in parts[1:]:   # parts[0] = alles vor dem ersten Item
+        # URL + Item-ID — Pflichtfeld; ohne ID wird Block verworfen
+        # Sponsored Items: href=https://ebay.com/itm/... (kein www) → kein Match
         um = _RE_URL.search(block)
         if not um:
             continue
-        item_url  = um.group(1)
-        item_id   = um.group(2)
+        item_url = um.group(1)
+        item_id  = um.group(2)
 
         # Preis
         price = _parse_price(block)
 
-        # Titel
+        # Titel (s-card__title → span → Text)
         title = '-'
         tm = _RE_TITLE.search(block)
         if tm:
-            title = _clean_title(tm.group(1))
+            raw = _RE_TAGS.sub('', tm.group(1)).strip()
+            # eBay-Fuelltext in manchen Blöcken entfernen
+            for noise in ('Wird in neuem Fenster', 'Opens in a new window'):
+                raw = raw.split(noise)[0].strip()
+            title = raw or '-'
 
-        # Datum (Best-Effort)
-        sold_date = _parse_date(block)
+        # Verkaufsdatum (Best-Effort)
+        sold_date = ''
+        dm = _RE_SOLD_DATE.search(block)
+        if dm:
+            sold_date = dm.group(1).strip()
 
         items.append(SoldItem(
             title          = title,
             price          = price,
-            currency       = 'EUR',          # Scraper primaer DE-fokussiert; TODO: aus Domain ableiten
+            currency       = 'EUR',          # Scraper primaer DE-fokussiert
             sold_date      = sold_date,
             condition      = 'New',          # Angenommen wegen LH_ItemCondition=3
             buying_options = 'FIXED_PRICE',  # Angenommen wegen LH_BIN=1
