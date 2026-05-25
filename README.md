@@ -74,11 +74,16 @@ price = get_item_price('B07XY...', credentials)   # Buy-Box oder niedrigster Neu
 ### Gebuehren & Restrictions
 
 ```python
-from amazon_sp import estimate_fba_fees, check_restrictions
+from amazon_sp import estimate_fba_fees, get_last_fee_error, check_restrictions
 
-fee     = estimate_fba_fees('B07XY...', price=29.99, credentials=creds)
-allowed = check_restrictions('B07XY...', seller_id='AXXX...', credentials=creds)
+fee        = estimate_fba_fees('B07XY...', price=29.99, credentials=creds)
+fees_error = get_last_fee_error()   # None = OK; str = Fehlertext (z.B. "AttributeError: ...")
+allowed    = check_restrictions('B07XY...', seller_id='AXXX...', credentials=creds)
 ```
+
+`get_last_fee_error()` gibt den thread-lokalen Fehler des letzten `estimate_fba_fees()`-Aufrufs
+zurueck. Bei Fehler wird die Exception zusaetzlich auf `sys.stderr` ausgegeben.
+Sinnvoll fuer Fehler-Sichtbarkeit in UI oder Logs ohne das Fehler-als-None-Muster zu brechen.
 
 ### CatalogResult-Felder
 
