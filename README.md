@@ -9,7 +9,7 @@ Wird als **Git Submodul** unter `providers/` in EAN2JTL und amz-einkauf eingebun
 |---|---|---|
 | `amazon_sp` | ✅ v1.0.0 | Amazon Selling Partner API — Katalog, Preise, Gebuehren, Restrictions |
 | `icecat` | ✅ v1.0.0 | Icecat REST API — Produktdaten, Bilder, Features |
-| `brickmerge` | 🔜 Phase 3 | brickmerge.de — CSV-Cache, EOL-Listen, Live-Preise |
+| `brickmerge` | ✅ v1.0.0 | brickmerge.de — SQLite-Cache, EOL-Listen (5 Jahre), Live-Preise + Händleranzahl |
 | `ebay` | 🔜 Phase 4 | eBay Browse API — Marktpreise, Sell-Through |
 
 ## Abhängigkeiten
@@ -131,6 +131,66 @@ if product:
 | `main_image` | `str` | URL des Hauptbildes |
 | `all_images` | `list[str]` | Alle Bild-URLs (dedupliziert) |
 | `features` | `list[dict]` | `[{name, value}]` — Technische Merkmale |
+
+## brickmerge — Kurzreferenz
+
+```python
+from brickmerge import SetCatalog, BrickmergeProvider, get_catalog
+from pathlib import Path
+
+# ── Katalog (SQLite-Cache + CSV-Downloads) ─────────────────────────────────
+catalog = SetCatalog(db_path=Path('brickmerge_catalog.db'), eol_years=5)
+
+info = catalog.get('10294')           # SetInfo oder None
+info = catalog.find_by_ean('12345678901234')
+
+if info:
+    print(info.name, info.uvp, info.status)   # 'active' | 'eol'
+    print(info.eol_year)                       # None oder Jahreszahl
+
+# Manuelles Refresh
+catalog.refresh_active(force=True)
+catalog.refresh_all_eol(n_years=5, force=True)
+
+# ── Live-Scraping (Preise + Haendleranzahl) ────────────────────────────────
+prov   = BrickmergeProvider(timeout=20)
+result = prov.get_prices(
+    '10294',
+    ean_hint = info.ean if info else None,   # EAN aus Katalog (kein Regex noetig)
+    uvp_hint = info.uvp if info else None,   # UVP aus Katalog (kein HTML-Regex)
+    url_hint = info.brickmerge_url if info else None,
+)
+if result:
+    print(result.best_price_current, result.seller_count)
+    print(result.uvp_original, result.best_price_alltime)
+```
+
+### SetInfo-Felder
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `set_no` | `str` | LEGO-Set-Nummer (z.B. `"10294"`) |
+| `name`, `theme` | `str` | Produktname, Thema |
+| `uvp` | `float\|None` | UVP in EUR (inkl. MwSt) |
+| `year` | `int\|None` | Erscheinungsjahr |
+| `ean` | `str\|None` | EAN-13 |
+| `asin` | `str\|None` | Amazon ASIN |
+| `brickmerge_url` | `str\|None` | Kanonische Brickmerge-URL |
+| `status` | `str` | `'active'` oder `'eol'` |
+| `eol_year` | `int\|None` | Jahrgang der EOL-Liste (None = aktiv) |
+
+### MarketPrices-Felder
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `uvp_original` | `float\|None` | UVP bei Release |
+| `uvp_current` | `float\|None` | Aktuelle UVP (EOL oft hoeher) |
+| `best_price_alltime` | `float\|None` | All-Time-Bestpreis |
+| `best_price_alltime_days_ago` | `int\|None` | Alter des Bestpreises |
+| `best_price_180d` | `float\|None` | Bestpreis letzte 180 Tage |
+| `best_price_current` | `float\|None` | Aktueller Brickmerge-Bestpreis |
+| `seller_count` | `int\|None` | Anzahl aktiver Haendler |
+| `source`, `url`, `fetched_at` | `str` | Meta-Felder |
 
 ## Submodul aktualisieren
 
