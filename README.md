@@ -10,7 +10,7 @@ Wird als **Git Submodul** unter `providers/` in EAN2JTL und amz-einkauf eingebun
 | `amazon_sp` | ✅ v1.0.0 | Amazon Selling Partner API — Katalog, Preise, Gebuehren, Restrictions |
 | `icecat` | ✅ v1.0.0 | Icecat REST API — Produktdaten, Bilder, Features |
 | `brickmerge` | ✅ v1.0.0 | brickmerge.de — SQLite-Cache, EOL-Listen (5 Jahre), Live-Preise + Händleranzahl |
-| `ebay` | 🔜 Phase 4 | eBay Browse API — Marktpreise, Sell-Through |
+| `ebay` | ✅ v1.0.0 | eBay Browse API + Marketplace Insights — Marktpreise, Sell-Through-Rate |
 
 ## Abhängigkeiten
 
@@ -191,6 +191,64 @@ if result:
 | `best_price_current` | `float\|None` | Aktueller Brickmerge-Bestpreis |
 | `seller_count` | `int\|None` | Anzahl aktiver Haendler |
 | `source`, `url`, `fetched_at` | `str` | Meta-Felder |
+
+## ebay — Kurzreferenz
+
+```python
+from ebay import get_market_snapshot, search_sold, search_active
+
+creds = {
+    'client_id':     'DEINE_APP_ID',
+    'client_secret': 'DEINE_CERT_ID',
+    'env':           'production',    # oder 'sandbox'
+}
+
+# ── Kombinierter Snapshot (aktive + verkaufte Angebote + STR) ──────────────
+snap = get_market_snapshot('4010232075488', creds, marketplace='EBAY_DE')
+
+print(snap.sell_through_rate)      # z.B. 0.75 = 75% aller Angebote verkauft
+print(snap.sold_median)            # Median-Verkaufspreis (letzte ~90 Tage)
+print(snap.active_median)          # Median aktiver Angebotspreis
+print(snap.sold_total)             # Gesamtanzahl verkaufte Angebote laut API
+print(snap.active_total)           # Gesamtanzahl aktive Angebote laut API
+print(snap.sold_error)             # None = OK; str = Fehler (z.B. 403)
+print(snap.active_error)
+
+for item in snap.sold_items[:5]:
+    print(item.price, item.sold_date, item.title[:60])
+
+# ── Nur verkaufte Angebote (Terapeak-Aequivalent) ──────────────────────────
+total, items, error = search_sold('4010232075488', creds)
+
+# ── Nur aktive Angebote (Marktpreisspiegel) ────────────────────────────────
+total, items, error = search_active('4010232075488', creds)
+```
+
+### MarketSnapshot-Felder
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `sold_total` | `int\|None` | Gesamtanzahl verkaufter Angebote laut API |
+| `sold_median/mean/min/max` | `float\|None` | Preisstatistik der verkauften Angebote |
+| `sold_count` | `int` | Anzahl Angebote mit Preis (Basis der Statistik) |
+| `sold_items` | `list[SoldItem]` | Einzelne verkaufte Angebote |
+| `sold_error` | `str\|None` | Fehlermeldung (None = OK) |
+| `active_total` | `int\|None` | Gesamtanzahl aktiver Angebote laut API |
+| `active_median/mean/min/max` | `float\|None` | Preisstatistik aktiver Angebote |
+| `active_items` | `list[ActiveItem]` | Einzelne aktive Angebote |
+| `active_error` | `str\|None` | Fehlermeldung (None = OK) |
+| `sell_through_rate` | `float\|None` | `sold_total / (sold_total + active_total)` |
+
+### Voraussetzungen eBay API
+
+```
+ebay_client_id     # App-ID (Client-ID) aus dem eBay Developer Portal
+ebay_client_secret # Cert-ID (Client-Secret)
+```
+
+Marketplace Insights (verkaufte Angebote) benoetigt zusaetzlich eine
+**Business Policy Approval** von eBay fuer den Scope `buy.marketplace.insights`.
+Browse API (aktive Angebote) ist mit dem Basis-Scope verfuegbar.
 
 ## Submodul aktualisieren
 
