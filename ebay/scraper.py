@@ -16,6 +16,13 @@ Nur fuer eigene Recherche / nicht-kommerziellen Eigengebrauch.
 
 CHANGELOG
 ---------
+v1.1.0  (2026-05-25)
+  - Session-Cache pro Domain: erst Homepage besuchen (immer 200) fuer
+    Akamai-Session-Cookies (dp1/nonsession/s/ds2/ebay), dann Suche.
+    Loest HTTP 403 von Akamai-WAF auf /sch/i.html fuer DataCenter-IPs.
+    Bei erneutem 403: Session-Neuinitialisierung + 1 Retry.
+    _get_session(domain) verwaltet gecachte Sessions pro Domain.
+
 v1.0.0  (2026-05-25)
   - scrape_sold(): Abgeschlossene Listings scraepen, kompatibel zu search_sold().
   - HTML-Parsing: Preis (DE+EN Format), Titel, Item-URL, Item-ID.
@@ -31,7 +38,7 @@ import requests
 
 from ._models import SoldItem
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 TIMEOUT = 30
 
@@ -62,6 +69,28 @@ _HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Encoding': 'gzip, deflate, br',
 }
+
+# ── Session-Cache pro Domain ───────────────────────────────────────────────────
+# Akamai-WAF blockt /sch/i.html von DataCenter-IPs ohne gueltige Session-Cookies.
+# Loesung: erst Homepage besuchen (immer 200) -> Cookies (dp1/nonsession/s/...) ->
+# dann Suche mit Session. Session pro Domain gecacht; bei 403 neu initialisiert.
+_sessions: dict[str, requests.Session] = {}
+
+
+def _get_session(domain: str) -> requests.Session:
+    """
+    Gibt eine gueltige requests.Session fuer die eBay-Domain zurueck.
+    Beim ersten Aufruf: Homepage besuchen fuer Akamai-Session-Cookies.
+    """
+    if domain not in _sessions:
+        session = requests.Session()
+        session.headers.update(_HEADERS)
+        try:
+            session.get(f'https://{domain}/', timeout=20)   # Cookie-Warm-up
+        except Exception:
+            pass   # Wenn Homepage scheitert, trotzdem versuchen
+        _sessions[domain] = session
+    return _sessions[domain]
 
 # ── Parse-Regexes ──────────────────────────────────────────────────────────────
 
@@ -142,9 +171,15 @@ def scrape_sold(
     if new_only:
         params['LH_ItemCondition'] = '3'   # 3 = Neu / New
 
-    url = f'https://{domain}/sch/i.html'
+    url     = f'https://{domain}/sch/i.html'
+    session = _get_session(domain)
     try:
-        resp = requests.get(url, params=params, headers=_HEADERS, timeout=TIMEOUT)
+        resp = session.get(url, params=params, timeout=TIMEOUT)
+        if resp.status_code == 403:
+            # Session abgelaufen oder Cookie ungueltig: neu initialisieren + 1 Retry
+            _sessions.pop(domain, None)
+            session = _get_session(domain)
+            resp = session.get(url, params=params, timeout=TIMEOUT)
         resp.raise_for_status()
     except requests.HTTPError as e:
         code = e.response.status_code if e.response is not None else '?'
