@@ -8,7 +8,7 @@ Wird als **Git Submodul** unter `providers/` in EAN2JTL und amz-einkauf eingebun
 | Modul | Status | Beschreibung |
 |---|---|---|
 | `amazon_sp` | ✅ v1.0.0 | Amazon Selling Partner API — Katalog, Preise, Gebuehren, Restrictions |
-| `icecat` | 🔜 Phase 2 | Icecat REST API — Produktdaten, Bilder, Features |
+| `icecat` | ✅ v1.0.0 | Icecat REST API — Produktdaten, Bilder, Features |
 | `brickmerge` | 🔜 Phase 3 | brickmerge.de — CSV-Cache, EOL-Listen, Live-Preise |
 | `ebay` | 🔜 Phase 4 | eBay Browse API — Marktpreise, Sell-Through |
 
@@ -100,6 +100,37 @@ allowed = check_restrictions('B07XY...', seller_id='AXXX...', credentials=creds)
 | `bsr_class_ranks` | `list[dict]` | Alle classificationRanks |
 | `rating`, `review_count` | `float\|None, int` | Sternebewertung, Anzahl Reviews |
 | `error` | `str\|None` | None = OK; sonst Fehlermeldung |
+
+## icecat — Kurzreferenz
+
+```python
+from icecat import IcecatClient
+
+client = IcecatClient(shopname, api_token, content_token, language='DE')
+
+# Token pruefen
+ok, msg = client.verify_token()
+
+# Produkt abrufen (EAN, Brand+MPN oder Icecat-ID)
+raw     = client.fetch_by_ean('4010232075488')
+product = client.parse_product(raw, ean='4010232075488')
+if product:
+    print(product['name'], product['brand'])
+    print(product['main_image'])
+    print(product['features'])   # [{name, value}, ...]
+```
+
+### parse_product()-Felder
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `ean`, `icecat_id` | `str` | Identifikatoren |
+| `name`, `brand`, `mpn` | `str` | Titel, Marke, Modellnummer |
+| `category` | `str` | Icecat-Kategorie |
+| `short_desc`, `long_desc` | `str` | Kurz- und Langbeschreibung |
+| `main_image` | `str` | URL des Hauptbildes |
+| `all_images` | `list[str]` | Alle Bild-URLs (dedupliziert) |
+| `features` | `list[dict]` | `[{name, value}]` — Technische Merkmale |
 
 ## Submodul aktualisieren
 
