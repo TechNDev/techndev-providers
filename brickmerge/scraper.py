@@ -11,6 +11,10 @@ Scraping-Strategie:
 
 CHANGELOG
 ---------
+v1.2.0  (2026-05-26)
+  - minifig_count, minifig_exclusive_count: RE_MINIFIGS_TOTAL + RE_MINIFIGS_EXCL.
+    Exklusiver Count wird in einem 300-Zeichen-Fenster nach dem Total-Match gesucht.
+
 v1.1.0  (2026-05-26)
   - 14 neue Felder: piece_count, weight_part_g, weight_set_g, box_l/w/h_cm,
     age_min, release_month, eol_month, plc_months, dealer_pack_qty,
@@ -34,7 +38,7 @@ from urllib.request import Request, urlopen
 
 from ._models import MarketPrices, now_iso
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Konstanten
@@ -136,6 +140,18 @@ RE_POV = re.compile(
 # POV-Rate: "Rate: 2,6" (deutsche Dezimalzahl, kein &euro;)
 RE_POV_RATE = re.compile(r"Rate:\s*([\d]+,[\d]+)", re.IGNORECASE)
 
+# ── Minifiguren-Pattern ───────────────────────────────────────────────────────
+# "Minifiguren: <strong>11</strong> (davon <strong>10</strong> exklusiv...)"
+# oder: "davon 10 exklusiv in diesem Set" (ohne inner <strong>)
+RE_MINIFIGS_TOTAL = re.compile(
+    r"Minifiguren[:\s]+<strong>\s*(\d+)\s*</strong>",
+    re.IGNORECASE,
+)
+RE_MINIFIGS_EXCL = re.compile(
+    r"davon\s+(?:<[^>]+>)?(\d+)(?:<[^>]+>)?\s+exklusiv",
+    re.IGNORECASE,
+)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Hilfsfunktionen
@@ -225,6 +241,29 @@ def _extract_pov_rate(html: str) -> float | None:
         return float(m.group(1).replace(",", "."))
     except (TypeError, ValueError):
         return None
+
+
+def _extract_minifigs(html: str) -> tuple[int | None, int | None]:
+    """
+    Extrahiert Minifiguren-Gesamtanzahl und exklusive Anzahl.
+
+    Brickmerge zeigt z.B.:
+      'Minifiguren: <strong>11</strong> (davon <strong>10</strong> exklusiv in diesem Set)'
+      'Minifiguren: <strong>11</strong> (davon 10 exklusiv in diesem Set)'
+
+    Gibt (total, exclusive) zurueck; exclusive ist None wenn nicht angegeben
+    (Set hat keine exklusiven Figs, oder Brickmerge zeigt es nicht an).
+    Gibt (None, None) zurueck wenn keine Minifiguren auf der Seite.
+    """
+    m_total = RE_MINIFIGS_TOTAL.search(html)
+    if not m_total:
+        return None, None
+    total = int(m_total.group(1))
+    # Exklusiv-Angabe im 300-Zeichen-Fenster direkt nach dem Total-Match suchen
+    window = html[m_total.start(): m_total.start() + 300]
+    m_excl = RE_MINIFIGS_EXCL.search(window)
+    excl = int(m_excl.group(1)) if m_excl else None
+    return total, excl
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -331,6 +370,11 @@ class BrickmergeProvider:
             # ── POV ─────────────────────────────────────────────────────────
             pov                         = _extract_price(RE_POV, html),
             pov_rate                    = _extract_pov_rate(html),
+            # ── Minifiguren ──────────────────────────────────────────────
+            **dict(zip(
+                ('minifig_count', 'minifig_exclusive_count'),
+                _extract_minifigs(html),
+            )),
             source                      = self.name,
             url                         = fetch_url,
             fetched_at                  = now_iso(),

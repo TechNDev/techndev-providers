@@ -8,6 +8,10 @@ Vorher: SetInfo in mydealz-watcher/setcatalog.py,
 
 CHANGELOG
 ---------
+v1.2.0  (2026-05-26)
+  - MarketPrices: minifig_count, minifig_exclusive_count (beide None-defaulted).
+    Exklusive Minifiguren koennen eigenstaendigen Wiederverkaufswert haben.
+
 v1.1.0  (2026-05-26)
   - MarketPrices: 14 neue optionale Felder (alle None-defaulted → 100 %
     rueckwaertskompatibel). Neu: piece_count, weight_part_g, weight_set_g,
@@ -26,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -114,6 +118,8 @@ class MarketPrices:
     best_price_30d:               float | None = None
     pov:                          float | None = None
     pov_rate:                     float | None = None
+    minifig_count:                int   | None = None   # Gesamtzahl Minifiguren
+    minifig_exclusive_count:      int   | None = None   # davon exklusiv in diesem Set
 
     def to_dict(self) -> dict:
         return asdict(self)
