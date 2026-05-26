@@ -372,4 +372,6 @@ class BrickmergeCache:
             source                      = row.get('source') or 'brickmerge',
             url                         = row.get('url')    or '',
             fetched_at                  = row.get('current_fetched_at') or '',
+            # best_price_current kommt aus dem Cache — explizit markieren
+            price_is_live               = False,
         )

@@ -120,6 +120,13 @@ class MarketPrices:
     pov_rate:                     float | None = None
     minifig_count:                int   | None = None   # Gesamtzahl Minifiguren
     minifig_exclusive_count:      int   | None = None   # davon exklusiv in diesem Set
+    # ── Herkunfts-Flag ────────────────────────────────────────────────────────
+    # True  = best_price_current wurde gerade live von brickmerge.de geholt.
+    # False = best_price_current stammt aus dem SQLite-Cache (offline-Fallback
+    #         oder TTL noch nicht abgelaufen).
+    # Jede Anzeigeschicht MUSS dieses Flag pruefen bevor best_price_current
+    # dargestellt wird — gecachte Preise muessen als solche erkennbar sein.
+    price_is_live:                bool        = True
 
     def to_dict(self) -> dict:
         return asdict(self)
