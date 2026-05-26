@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """
-techndev-providers  brickmerge/scraper.py  v1.0.0
+techndev-providers  brickmerge/scraper.py  v1.1.0
 ===================================================
-Live-Scraper fuer brickmerge.de — Preise + Haendleranzahl.
-
-Vorher: BrickmergeProvider in mydealz-watcher/pricesource_brickmerge.py.
-Neu:    + seller_count (Anzahl aktiver Haendler aus der Detailseite)
+Live-Scraper fuer brickmerge.de — Preise, Stammdaten + Produktdetails.
 
 Scraping-Strategie:
   Server-gerendertes HTML — kein JS erforderlich.
@@ -14,13 +11,18 @@ Scraping-Strategie:
 
 CHANGELOG
 ---------
+v1.1.0  (2026-05-26)
+  - 14 neue Felder: piece_count, weight_part_g, weight_set_g, box_l/w/h_cm,
+    age_min, release_month, eol_month, plc_months, dealer_pack_qty,
+    best_price_30d, pov, pov_rate.
+  - Hilfsfunktion _parse_month_year(): 'MM/YYYY' → 'YYYY-MM'.
+  - Alle bestehenden Pattern unveraendert.
+
 v1.0.0  (2026-05-25)
   - Initiales Release, extrahiert + erweitert aus pricesource_brickmerge.py.
-  - seller_count: neues Feld in MarketPrices — Anzahl aktiver Haendler
-    via RE_SELLER_COUNT (Pattern: 'bei N Haendlern' / 'N Haendler').
+  - seller_count: Anzahl aktiver Haendler via RE_SELLER_COUNT.
   - Alle bisherigen Pattern (UVP, Bestpreis, EAN, Name, 180d) unveraendert.
-  - BrickmergeProvider.get_prices() gibt jetzt MarketPrices aus _models statt
-    aus pricesource (identisches Feldset + seller_count).
+  - BrickmergeProvider.get_prices() gibt MarketPrices aus _models zurueck.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ from urllib.request import Request, urlopen
 
 from ._models import MarketPrices, now_iso
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Konstanten
@@ -77,14 +79,85 @@ RE_SELLER_COUNT = re.compile(
     re.IGNORECASE,
 )
 
+# ── Produkt-Stammdaten-Pattern ────────────────────────────────────────────────
+# Alle Pattern erwarten server-gerendertes HTML mit <strong>...</strong>.
+# HTML-Entitaeten sind bereits auf UTF-8 dekodiert (resp.read().decode('utf-8')).
+
+_INT_IN_STRONG   = r"<strong>\s*(\d+)\s*</strong>"
+_FLOAT_IN_STRONG = r"<strong>\s*([\d.]+)\s*</strong>"
+
+# Teileanzahl: "Teile: <strong>326</strong>"
+RE_PIECE_COUNT = re.compile(r"Teile:\s*" + _INT_IN_STRONG, re.IGNORECASE)
+
+# Alter: "Alter: <strong>8+</strong>"  oder  "Alter <strong>8</strong>+"
+RE_AGE_MIN = re.compile(r"Alter[:\s]+<strong>\s*(\d+)\+?\s*</strong>", re.IGNORECASE)
+
+# Gewicht: "Teilegewicht: <strong>≈228 g</strong>"
+# ≈ ist U+2248 oder &asymp;, beide nach UTF-8-Decode als Literal vorhanden
+RE_WEIGHT_PARTS = re.compile(
+    r"Teilegewicht[:\s]+<strong>\s*[≈~]?\s*(\d+)\s*g\s*</strong>",
+    re.IGNORECASE,
+)
+RE_WEIGHT_SET = re.compile(
+    r"Setgewicht[:\s]+<strong>\s*[≈~]?\s*(\d+)\s*g\s*</strong>",
+    re.IGNORECASE,
+)
+
+# OVP-Maße: "OVP-Maße: <strong>19.1 x 26.2 x 6.1 cm</strong>"
+# Dezimaltrennzeichen ist Punkt (nicht Komma) bei Abmessungen auf brickmerge
+RE_BOX_DIMS = re.compile(
+    r"OVP-Ma[ße]{1,2}e?[:\s]+<strong>\s*"
+    r"([\d.]+)\s*x\s*([\d.]+)\s*x\s*([\d.]+)\s*cm\s*</strong>",
+    re.IGNORECASE,
+)
+
+# Haendler-VE: "Händler-VE: <strong>6/Karton</strong>"
+RE_DEALER_VE = re.compile(
+    r"H[äa]ndler-VE[:\s]+<strong>\s*(\d+)/Karton\s*</strong>",
+    re.IGNORECASE,
+)
+
+# Datumsangaben im Format "MM/YYYY": Release, EOL
+RE_RELEASE = re.compile(r"Release[:\s]+<strong>\s*(\d{2}/\d{4})\s*</strong>", re.IGNORECASE)
+RE_EOL_DATE = re.compile(r"EOL[:\s]+<strong>\s*(\d{2}/\d{4})\s*</strong>",     re.IGNORECASE)
+
+# PLC: "PLC: <strong>19 Monate</strong>"
+RE_PLC = re.compile(r"PLC[:\s]+<strong>\s*(\d+)\s*Monat\w*\s*</strong>", re.IGNORECASE)
+
+# 30-Tage-Bestpreis (analog zu RE_BEST_180D)
+RE_BEST_30D = re.compile(r"30\s*Tage\s*Bestpreis:\s*" + _PRICE_AFTER, re.IGNORECASE)
+
+# POV-Wiederverkaufswert: "POV: ca. <strong>35,33&nbsp;&euro;</strong>"
+# 'ca.' kann vor oder innerhalb des <strong>-Tags stehen
+RE_POV = re.compile(
+    r"POV:\s*(?:ca\.)?\s*<strong>\s*(?:ca\.)?\s*([\d.]+,\d{2})\s*(?:&nbsp;)?\s*&euro;\s*</strong>",
+    re.IGNORECASE,
+)
+# POV-Rate: "Rate: 2,6" (deutsche Dezimalzahl, kein &euro;)
+RE_POV_RATE = re.compile(r"Rate:\s*([\d]+,[\d]+)", re.IGNORECASE)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Hilfsfunktionen
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _to_float(de_price: str) -> float:
-    """'1.299,00' -> 1299.00 ; '679,99' -> 679.99"""
+    """'1.299,00' -> 1299.00 ; '679,99' -> 679.99  (Deutsche Schreibweise)"""
     return float(de_price.replace(".", "").replace(",", "."))
+
+
+def _parse_month_year(raw: str) -> str | None:
+    """
+    Konvertiert Brickmerge-Datumsformat 'MM/YYYY' nach ISO 'YYYY-MM'.
+    Gibt None zurueck wenn raw kein gueltiges Format hat.
+    """
+    try:
+        mm, yyyy = raw.strip().split("/")
+        if len(mm) == 2 and len(yyyy) == 4:
+            return f"{yyyy}-{mm}"
+    except (ValueError, AttributeError):
+        pass
+    return None
 
 
 def _extract_price(pattern: re.Pattern, html: str) -> float | None:
@@ -113,6 +186,43 @@ def _extract_seller_count(html: str) -> int | None:
     raw = m.group(1) or m.group(2)
     try:
         return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_int(pattern: re.Pattern, html: str) -> int | None:
+    """Extrahiert erste Capture-Group aus pattern als int, oder None."""
+    m = pattern.search(html)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_box_dims(html: str) -> tuple[float | None, float | None, float | None]:
+    """
+    Extrahiert OVP-Abmessungen (L x B x H) in cm.
+    Gibt (None, None, None) wenn kein Match.
+    Dezimaltrennzeichen ist Punkt (englische Schreibweise bei Massen auf brickmerge).
+    """
+    m = RE_BOX_DIMS.search(html)
+    if not m:
+        return None, None, None
+    try:
+        return float(m.group(1)), float(m.group(2)), float(m.group(3))
+    except (TypeError, ValueError):
+        return None, None, None
+
+
+def _extract_pov_rate(html: str) -> float | None:
+    """Extrahiert die POV-Rate (z.B. '2,6') als float."""
+    m = RE_POV_RATE.search(html)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", "."))
     except (TypeError, ValueError):
         return None
 
@@ -188,6 +298,12 @@ class BrickmergeProvider:
         ean   = ean_hint or (m_ean.group(1) if m_ean else None)
 
         m_alltime = RE_BEST_ALLTIME.search(html)
+        box_l, box_w, box_h = _extract_box_dims(html)
+
+        # Datumsfelder: 'MM/YYYY' → 'YYYY-MM'
+        m_release = RE_RELEASE.search(html)
+        m_eol     = RE_EOL_DATE.search(html)
+
         return MarketPrices(
             set_no                      = set_no,
             name                        = _extract_name(html),
@@ -196,9 +312,25 @@ class BrickmergeProvider:
             uvp_current                 = uvp_curr,
             best_price_alltime          = _to_float(m_alltime.group(1)) if m_alltime else None,
             best_price_alltime_days_ago = int(m_alltime.group(2))       if m_alltime else None,
-            best_price_180d             = _extract_price(RE_BEST_180D, html),
+            best_price_180d             = _extract_price(RE_BEST_180D,    html),
+            best_price_30d              = _extract_price(RE_BEST_30D,     html),
             best_price_current          = _extract_price(RE_BEST_CURRENT, html),
             seller_count                = _extract_seller_count(html),
+            # ── Produkt-Stammdaten ──────────────────────────────────────────
+            piece_count                 = _extract_int(RE_PIECE_COUNT,  html),
+            age_min                     = _extract_int(RE_AGE_MIN,      html),
+            weight_part_g               = _extract_int(RE_WEIGHT_PARTS, html),
+            weight_set_g                = _extract_int(RE_WEIGHT_SET,   html),
+            box_l_cm                    = box_l,
+            box_w_cm                    = box_w,
+            box_h_cm                    = box_h,
+            dealer_pack_qty             = _extract_int(RE_DEALER_VE, html),
+            release_month               = _parse_month_year(m_release.group(1)) if m_release else None,
+            eol_month                   = _parse_month_year(m_eol.group(1))     if m_eol     else None,
+            plc_months                  = _extract_int(RE_PLC, html),
+            # ── POV ─────────────────────────────────────────────────────────
+            pov                         = _extract_price(RE_POV, html),
+            pov_rate                    = _extract_pov_rate(html),
             source                      = self.name,
             url                         = fetch_url,
             fetched_at                  = now_iso(),
