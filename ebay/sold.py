@@ -1,70 +1,93 @@
 #!/usr/bin/env python3
 """
-techndev-providers  ebay/sold.py  v1.1.0
+techndev-providers  ebay/sold.py  v2.0.0
 =========================================
-eBay Marketplace Insights API — verkaufte Angebote (Terapeak-Aequivalent).
-Endpoint: GET /buy/marketplace_insights/v1_beta/item_sales/search
+Verkaufte eBay-Angebote — primaer via HTML-Scraper.
 
-Voraussetzung: eBay Developer Account mit Marketplace Insights Freischaltung
-(Business Policy Approval). Scope: buy.marketplace.insights.
+Primary:  scraper.scrape_sold() (HTML-Scraping von /sch/i.html?LH_Sold=1)
+Backlog:  Marketplace Insights API (_search_sold_api) — reaktivieren sobald
+          eBay Business Approval fuer Scope buy.marketplace.insights erteilt.
 
 CHANGELOG
 ---------
+v2.0.0  (2026-05-28)
+  - BREAKING: search_sold() ruft direkt scrape_sold() auf; kein API-Versuch mehr.
+    scrape_fallback-Parameter entfernt (war Workaround, jetzt Normalzustand).
+  - BACKLOG: _search_sold_api() isoliert die MI-API-Logik fuer spaetere
+    Reaktivierung. Zugehoerige Importe (_auth, requests) nur dort referenziert.
+
 v1.1.0  (2026-05-25)
   - Scraper-Fallback: bei Token HTTP 400/403 (Marketplace Insights nicht freigeschaltet)
     oder API HTTP 403 wird scraper.scrape_sold() als Fallback aufgerufen.
-    Transparente Rueckgabe — gleicher Tuple wie API-Pfad.
-    Neuer Parameter scrape_fallback=True (False = altes Verhalten ohne Fallback).
 
 v1.0.0  (2026-05-25)
   - search_sold(): Suche nach verkauften Sofort-Kaufen-Neu-Angeboten via GTIN
     oder Freitext. Gibt SoldResult-kompatible Daten zurueck.
-  - _parse_items(): EbaySoldApiItem-Parser aus _test_ebay_api.py uebernommen.
-  - Graceful 403-Handling: wenn Marketplace Insights nicht freigeschaltet,
-    wird der Fehler als SoldResult mit sold_error gefangen (kein raise).
+  - _parse_items(): EbaySoldApiItem-Parser.
+  - Graceful 403-Handling.
 """
 from __future__ import annotations
 
-import requests
-
-from ._auth   import get_token, is_gtin, api_base, SCOPE_SOLD
-from ._models import SoldItem, _price_stats, now_iso
+from ._models import SoldItem
 from .scraper import scrape_sold
 
-__version__ = "1.1.0"
-
-# Standard-Filter: Sofort-Kaufen (kein Auktionschaos) + Zustand Neu (conditionId 1000)
-_DEFAULT_FILTER = "buyingOptions:{FIXED_PRICE},conditionIds:{1000}"
-
-TIMEOUT = 30
+__version__ = "2.0.0"
 
 
 def search_sold(
+    query:            str,
+    credentials:      dict,       # wird an _search_sold_api weitergegeben (Backlog)
+    marketplace:      str  = "EBAY_DE",
+    limit:            int  = 50,
+    new_only:         bool = True,
+    fixed_price_only: bool = True,
+) -> tuple[int | None, list[SoldItem], str | None]:
+    """
+    Sucht nach verkauften eBay-Angeboten.
+
+    Primary:  HTML-Scraper (scraper.scrape_sold).
+    Backlog:  Marketplace Insights API — sobald Business Approval erteilt,
+              _search_sold_api() als Primary, scrape_sold() als Fallback einsetzen.
+
+    query:            EAN/GTIN oder Freitext-Suchbegriff.
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}
+                      (derzeit nicht genutzt; Backlog: _search_sold_api).
+    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
+    limit:            Max. Ergebnisse (1-200).
+    new_only:         Nur Zustand Neu (LH_ItemCondition=3).
+    fixed_price_only: Nur Sofort-Kaufen (LH_BIN=1).
+
+    Rueckgabe: (total, items, error_or_None)
+    """
+    return scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BACKLOG: Marketplace Insights API
+# ─────────────────────────────────────────────────────────────────────────────
+# Reaktivieren wenn eBay Business Approval fuer buy.marketplace.insights erteilt.
+# Dann in search_sold():
+#   1. _search_sold_api() als Primary aufrufen.
+#   2. Bei HTTPError 400/403 → scrape_sold() als Fallback.
+#   3. scrape_fallback-Parameter wieder einfuehren.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _search_sold_api(
     query:            str,
     credentials:      dict,
     marketplace:      str  = "EBAY_DE",
     limit:            int  = 50,
     new_only:         bool = True,
     fixed_price_only: bool = True,
-    scrape_fallback:  bool = True,
 ) -> tuple[int | None, list[SoldItem], str | None]:
     """
-    Sucht nach verkauften eBay-Angeboten via Marketplace Insights API.
-    Bei HTTP 400/403 (Scope nicht freigeschaltet): Fallback auf Scraper.
-
-    query:            EAN/GTIN oder Freitext-Suchbegriff.
-    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}.
-    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
-    limit:            Max. Ergebnisse (1-200, API-Limit).
-    new_only:         Nur Zustand Neu (conditionId 1000).
-    fixed_price_only: Nur Sofort-Kaufen (FIXED_PRICE).
-    scrape_fallback:  Bei API-Sperre Fallback auf HTML-Scraper (Default: True).
-
-    Rueckgabe: (total, items, error_or_None)
-      total: Gesamtanzahl laut API/Scraper (kann > len(items) sein).
-      items: Geparste SoldItem-Liste.
-      error: None = OK; str = Fehlermeldung (beide Pfade gescheitert).
+    [BACKLOG] Marketplace Insights API — buy.marketplace.insights.
+    Endpoint: GET /buy/marketplace_insights/v1_beta/item_sales/search
+    Voraussetzung: eBay Business Approval fuer Scope buy.marketplace.insights.
     """
+    import requests  # lokaler Import — wird erst bei Reaktivierung benoetigt
+    from ._auth import get_token, is_gtin, api_base, SCOPE_SOLD
+
     client_id     = credentials["client_id"]
     client_secret = credentials["client_secret"]
     env           = credentials.get("env", "production")
@@ -73,16 +96,13 @@ def search_sold(
         token = get_token(client_id, client_secret, scope=SCOPE_SOLD, env=env)
     except requests.HTTPError as e:
         code = e.response.status_code if e.response is not None else "?"
-        if scrape_fallback and code in (400, 403):
-            return scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
         return None, [], (
             f"Token-Fehler (Marketplace Insights): HTTP {code} "
-            f"— Scope evtl. nicht freigeschaltet"
+            f"— Scope nicht freigeschaltet"
         )
     except Exception as e:
         return None, [], f"Token-Fehler: {e}"
 
-    # Filter zusammenbauen
     filters: list[str] = []
     if fixed_price_only:
         filters.append("buyingOptions:{FIXED_PRICE}")
@@ -107,17 +127,15 @@ def search_sold(
         resp = requests.get(
             url,
             headers={
-                "Authorization":          f"Bearer {token}",
+                "Authorization":           f"Bearer {token}",
                 "X-EBAY-C-MARKETPLACE-ID": marketplace,
-                "Accept":                 "application/json",
+                "Accept":                  "application/json",
             },
             params=params,
-            timeout=TIMEOUT,
+            timeout=30,
         )
         if resp.status_code == 403:
-            if scrape_fallback:
-                return scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
-            return None, [], "HTTP 403 — Marketplace Insights nicht freigeschaltet (Business Approval erforderlich)"
+            return None, [], "HTTP 403 — Marketplace Insights nicht freigeschaltet"
         resp.raise_for_status()
     except requests.HTTPError as e:
         code = e.response.status_code if e.response is not None else "?"
@@ -128,13 +146,11 @@ def search_sold(
     data     = resp.json()
     raw_list = data.get("itemSales") or data.get("itemSummaries") or []
     total    = data.get("total")
-
-    items = _parse_items(raw_list)
-    return total, items, None
+    return total, _parse_api_items(raw_list), None
 
 
-def _parse_items(raw_list: list[dict]) -> list[SoldItem]:
-    """Parst die item_sales-Antwort in SoldItem-Objekte."""
+def _parse_api_items(raw_list: list[dict]) -> list[SoldItem]:
+    """[BACKLOG] Parst die item_sales-API-Antwort in SoldItem-Objekte."""
     items: list[SoldItem] = []
     for raw in raw_list:
         price_raw = raw.get("price") or raw.get("currentBidPrice") or raw.get("itemPrice") or {}

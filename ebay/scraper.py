@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-techndev-providers  ebay/scraper.py  v1.2.0
+techndev-providers  ebay/scraper.py  v1.3.0
 =============================================
 eBay-Scraper fuer abgeschlossene (verkaufte) Listings.
-Fallback wenn Marketplace Insights API (buy.marketplace.insights) nicht
-freigeschaltet ist (HTTP 400/403 beim Token-Request).
+
+PRIMARY-Implementierung fuer search_sold() — wird direkt aufgerufen,
+solange Marketplace Insights API (buy.marketplace.insights) keine
+Business Approval hat. Kein API-Versuch vorgelagert.
 
 Endpoint: https://www.ebay.<tld>/sch/i.html?LH_Sold=1&LH_Complete=1&...
 
@@ -16,6 +18,11 @@ Nur fuer eigene Recherche / nicht-kommerziellen Eigengebrauch.
 
 CHANGELOG
 ---------
+v1.3.0  (2026-05-28)
+  - Rolle aenderung: scrape_sold() ist jetzt PRIMARY (nicht mehr Fallback).
+    Wird direkt von sold.search_sold() aufgerufen; kein API-Versuch davor.
+    Backlog: Rueckstufung auf Fallback sobald MI-API-Approval erteilt.
+
 v1.2.0  (2026-05-25)
   - Parser auf aktuelles eBay-HTML umgestellt: Klasse s-card (war s-item),
     Preis in s-card__price, Titel in s-card__title, Datum aus
