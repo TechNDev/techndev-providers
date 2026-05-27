@@ -7,6 +7,11 @@ Extrahiert aus amz-einkauf data_collector._add_fees.
 
 CHANGELOG
 ---------
+v1.3.0  (2026-05-28)
+  - get_fees_breakdown(): Pauschale Verkäuferkosten als Parameter ergänzt:
+    storage_fee_monthly (0,15 €), prep_fee (0,50 €), inbound_fee (1,00 €).
+    Rückgabe enthält jetzt seller_costs und total_all_in.
+
 v1.2.0  (2026-05-28)
   - get_fees_breakdown(): Gibt Gesamt- UND Einzelgebühren zurück
     (ReferralFee, FBAFees, VariableClosingFee, etc.) als strukturiertes Dict.
@@ -33,7 +38,7 @@ from sp_api.api import ProductFees
 from ._rate import _retry, pricing_limiter
 from ._helpers import get_marketplace, get_marketplace_id
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # ── Thread-lokaler Fehlerspeicher ─────────────────────────────────────────────
 # get_last_fee_error() gibt den Fehler des letzten gescheiterten Aufrufs zurueck.
@@ -116,23 +121,34 @@ def get_fees_breakdown(
     price: float,
     credentials: dict,
     marketplace: str = 'DE',
+    storage_fee_monthly: float = 0.15,
+    prep_fee: float = 0.50,
+    inbound_fee: float = 1.00,
 ) -> Optional[dict]:
     """
     Detaillierte Gebührenaufschlüsselung für eine ASIN.
 
+    Pauschale Verkäuferkosten (überschreibbar):
+        storage_fee_monthly  Lagergebühr pro Einheit/Monat  (Default: 0,15 €)
+        prep_fee             Prep-/Vorbereitungskosten       (Default: 0,50 €)
+        inbound_fee          Transport du → Amazon-Lager     (Default: 1,00 €)
+
     Rückgabe-Dict:
         {
-            "total":                float,   # Gesamtgebühr
-            "referral_fee":         float,   # Provision (%)
-            "fba_fee":              float,   # FBA-Fulfillment
+            # Amazon API-Gebühren
+            "total":                float,   # Amazon-Gesamtgebühr
+            "referral_fee":         float,   # Provision
+            "fba_fee":              float,   # FBA-Fulfillment (inkl. Versand → Kunde)
             "variable_closing_fee": float,   # Variabler Abschluss
             "per_item_fee":         float,   # Pro-Artikel-Gebühr
             "other_fees":           float,   # Sonstige
-            "details": [                     # Rohliste aller Posten
-                {"name": str, "amount": float, "promotion": float,
-                 "tax": float, "final": float},
-                ...
-            ],
+            # Pauschale Verkäuferkosten
+            "storage_fee_monthly":  float,   # Lager (je Monat)
+            "prep_fee":             float,   # Prep
+            "inbound_fee":          float,   # Inbound-Transport
+            "seller_costs":         float,   # Summe Verkäuferkosten
+            "total_all_in":         float,   # Amazon + Verkäuferkosten
+            "details": [...],
             "error": None | str,
         }
 
@@ -201,13 +217,21 @@ def get_fees_breakdown(
             bucket = _bucket_map.get(name.lower().replace('_', ' '), 'other_fees')
             buckets[bucket] += final if final else amount
 
+        amazon_total = float(total_raw)
+        seller_costs = round(storage_fee_monthly + prep_fee + inbound_fee, 2)
+
         return {
-            'total':                float(total_raw),
+            'total':                round(amazon_total,                    2),
             'referral_fee':         round(buckets['referral_fee'],         2),
             'fba_fee':              round(buckets['fba_fee'],              2),
             'variable_closing_fee': round(buckets['variable_closing_fee'], 2),
             'per_item_fee':         round(buckets['per_item_fee'],         2),
             'other_fees':           round(buckets['other_fees'],           2),
+            'storage_fee_monthly':  round(storage_fee_monthly,            2),
+            'prep_fee':             round(prep_fee,                        2),
+            'inbound_fee':          round(inbound_fee,                     2),
+            'seller_costs':         seller_costs,
+            'total_all_in':         round(amazon_total + seller_costs,     2),
             'details':              details,
             'error':                None,
         }
