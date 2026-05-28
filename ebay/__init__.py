@@ -1,138 +1,169 @@
 """
-techndev-providers  ebay  v1.2.0
+techndev-providers  ebay  v2.0.0
 ==================================
-eBay Datenprovider: Marktpreise (aktive Angebote) + Sell-Through (verkaufte Angebote).
+eBay Datenprovider fuer TechNDev Tools.
+Gemeinsame Bibliothek fuer amz-einkauf, mydealz-watcher, reseller-profitability.
 
-Auth:   OAuth 2.0 Application Token (Client Credentials) — kein User-Token noetig.
-APIs:   Browse API (aktive Listings).
-        Backlog: Marketplace Insights API (verkaufte Listings) — Reaktivierung
-        wenn eBay Business Approval fuer buy.marketplace.insights erteilt.
+Oeffentliche API
+----------------
+  from ebay import get_sold_listings, get_active_listings   # Marktdaten einzeln
+  from ebay import get_market_snapshot                       # Sold + Active kombiniert
+  from ebay import get_seller_analytics                      # Traffic-Report (User-Token)
+  from ebay import get_seller_standards                      # Performance-Level (User-Token)
+  from ebay import SoldResult, ActiveResult, MarketSnapshot  # Haupt-Datenmodelle
+  from ebay import SoldItem, ActiveItem                      # Einzel-Angebote
+  from ebay import TrafficReport, SellerStandards            # Analytics-Modelle
 
-Exports:
-  SoldItem, ActiveItem, MarketSnapshot  — Datenklassen
-  get_market_snapshot()                 — Kombinierter Haupt-Einstiegspunkt
-  search_sold()                         — Verkaufte Angebote (primary: Scraper)
-  search_active()                       — Aktive Angebote (Browse API)
-  scrape_sold()                         — Scraper direkt (identisches Return-Format)
-  get_token()                           — OAuth-Token direkt
-  SCOPE_BASIC, SCOPE_SOLD               — Scope-Konstanten
+Import-Pattern (Git-Submodul unter providers/)
+----------------------------------------------
+  import sys as _sys
+  from pathlib import Path as _Path
+  _PROV = _Path(__file__).resolve().parent / 'providers'
+  if str(_PROV) not in _sys.path:
+      _sys.path.insert(0, str(_PROV))
 
-Credentials-Format:
-  {
-    'client_id':     '...',   # eBay App-ID / Client-ID
-    'client_secret': '...',   # eBay Cert-ID / Client-Secret
-    'env':           'production',  # oder 'sandbox'  (optional, Default: production)
+  from ebay import get_sold_listings, SoldResult
+
+Credentials-Formate
+-------------------
+  # Marktdaten (kein Business-Approval noetig):
+  creds = {
+      'client_id':     '...',
+      'client_secret': '...',
+      'env':           'production',   # optional, Default: 'production'
   }
 
-Hinweis Sold-Daten:
-  Verkaufte Angebote werden primaer per HTML-Scraper ermittelt
-  (https://www.ebay.<tld>/sch/i.html?LH_Sold=1&LH_Complete=1).
-  Die Marketplace Insights API (buy.marketplace.insights) ist als Backlog
+  # Analytics (User-Token, sell.analytics.readonly):
+  creds_analytics = {
+      'client_id':     '...',
+      'client_secret': '...',
+      'refresh_token': '...',          # aus OAuth Authorization Code Flow
+      'env':           'production',
+  }
+
+Datenmodelle
+------------
+  SoldResult      result = get_sold_listings(ean, creds)
+    .ok()         → True wenn kein Fehler
+    .best_price   → Median-Preis (Fallback: Mean)
+    .median_price → Median aller verkauften Preise
+    .mean_price   → Durchschnitt
+    .min_price    → Minimum
+    .max_price    → Maximum
+    .count        → Anzahl Angebote mit Preis
+    .total        → Gesamtanzahl laut eBay
+    .items        → list[SoldItem]
+    .source       → 'scraper' | 'api'
+    .error        → None = OK, str = Fehlermeldung
+
+  ActiveResult    result = get_active_listings(ean, creds)
+    .ok(), .best_price, .median_price, ... (identisches Interface)
+
+  MarketSnapshot  snap = get_market_snapshot(ean, creds)
+    .sold         → SoldResult
+    .active       → ActiveResult
+    .sell_through_rate → sold.total / (sold.total + active.total)
+    .ok()         → True wenn mind. eine Seite erfolgreich
+
+Hinweis Sold-Daten
+------------------
+  Verkaufte Angebote werden primaer per HTML-Scraper ermittelt.
+  Marketplace Insights API (buy.marketplace.insights) ist als Backlog
   in sold._search_sold_api() hinterlegt — Reaktivierung nach Business Approval.
+  Application Growth Check gestellt: 2026-05-28.
 """
-from ._models   import SoldItem, ActiveItem, MarketSnapshot, now_iso, _price_stats, _calc_str
-from ._auth     import get_token, get_user_token, make_oauth_url, SCOPE_BASIC, SCOPE_SOLD, SCOPE_ANALYTICS
-from .sold      import search_sold
-from .browse    import search_active
+from ._models   import (
+    SoldItem, ActiveItem,
+    SoldResult, ActiveResult, MarketSnapshot,
+    now_iso, _price_stats, _calc_str,
+)
+from ._auth     import (
+    get_token, get_user_token, make_oauth_url,
+    SCOPE_BASIC, SCOPE_SOLD, SCOPE_ANALYTICS,
+)
+from .sold      import get_sold_listings, search_sold
+from .browse    import get_active_listings, search_active
 from .scraper   import scrape_sold
 from .analytics import (
-    get_traffic_report, get_seller_standards,
+    get_traffic_report  as get_seller_analytics,
+    get_seller_standards,
     TrafficRow, TrafficReport, SellerStandards, StandardsMetric,
     ALL_METRICS, DEFAULT_METRICS,
 )
 
+__version__ = "2.0.0"
+
 __all__ = [
-    # Marktdaten
-    "SoldItem",
-    "ActiveItem",
-    "MarketSnapshot",
-    "get_market_snapshot",
-    "search_sold",
-    "search_active",
-    "scrape_sold",
-    # Analytics (User-Token erforderlich)
-    "get_traffic_report",
-    "get_seller_standards",
-    "TrafficRow",
-    "TrafficReport",
-    "SellerStandards",
-    "StandardsMetric",
-    "ALL_METRICS",
-    "DEFAULT_METRICS",
-    # Auth
-    "get_token",
-    "get_user_token",
-    "make_oauth_url",
-    "SCOPE_BASIC",
-    "SCOPE_SOLD",
-    "SCOPE_ANALYTICS",
+    # ── Hauptfunktionen (analog amazon_sp) ───────────────────────────────────
+    'get_sold_listings',          # EAN/Query → SoldResult
+    'get_active_listings',        # EAN/Query → ActiveResult
+    'get_market_snapshot',        # EAN/Query → MarketSnapshot (sold + active)
+    # ── Analytics (User-Token erforderlich) ──────────────────────────────────
+    'get_seller_analytics',       # Traffic-Report → TrafficReport
+    'get_seller_standards',       # Performance-Level → SellerStandards
+    # ── Datenmodelle ─────────────────────────────────────────────────────────
+    'SoldResult',
+    'ActiveResult',
+    'MarketSnapshot',
+    'SoldItem',
+    'ActiveItem',
+    'TrafficReport',
+    'TrafficRow',
+    'SellerStandards',
+    'StandardsMetric',
+    'ALL_METRICS',
+    'DEFAULT_METRICS',
+    # ── Auth (fuer direkte Token-Nutzung) ────────────────────────────────────
+    'get_token',
+    'get_user_token',
+    'make_oauth_url',
+    'SCOPE_BASIC',
+    'SCOPE_SOLD',
+    'SCOPE_ANALYTICS',
+    # ── Legacy (abwaertskompatibel) ───────────────────────────────────────────
+    'search_sold',
+    'search_active',
+    'scrape_sold',
 ]
-__version__ = "1.3.0"
 
 
 def get_market_snapshot(
     query:            str,
     credentials:      dict,
-    marketplace:      str  = "EBAY_DE",
+    marketplace:      str  = 'EBAY_DE',
     limit:            int  = 50,
     new_only:         bool = True,
     fixed_price_only: bool = True,
 ) -> MarketSnapshot:
     """
-    Kombinierter eBay-Markt-Snapshot: ruft sold + active nacheinander ab.
-    Jede Seite wird unabhaengig abgerufen — Fehler einer Seite
-    beeinflussen die andere nicht (graceful degradation).
+    Kombinierter eBay-Markt-Snapshot: sold + active in einem Aufruf.
 
-    Sold-Daten: primaer per HTML-Scraper (Marketplace Insights API im Backlog).
-    Active-Daten: Browse API.
+    Analog zu amazon_sp: beide Seiten werden unabhaengig abgerufen —
+    Fehler einer Seite beeinflusst die andere nicht (graceful degradation).
 
-    query:            EAN (z.B. '4010232075488') oder Freitext ('LEGO 10294').
-    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}.
+    query:            EAN/GTIN (z.B. '4010232075488') oder Freitext ('LEGO 75192').
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}
     marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
-    limit:            Max. Ergebnisse pro Seite (1-200).
+    limit:            Max. Ergebnisse pro Seite (1-200, Default: 50).
     new_only:         Nur Zustand Neu.
     fixed_price_only: Nur Sofort-Kaufen.
 
-    Rueckgabe: MarketSnapshot mit sold_*/active_* + sell_through_rate.
+    Rueckgabe: MarketSnapshot
+      .sold              → SoldResult  (Scraper)
+      .active            → ActiveResult (Browse API)
+      .sell_through_rate → float | None
+      .ok()              → True wenn mind. eine Seite OK
     """
     ts = now_iso()
 
-    # ── Verkaufte Angebote (primary: HTML-Scraper) ────────────────────────────
-    sold_total, sold_items, sold_error = search_sold(
-        query, credentials, marketplace, limit, new_only, fixed_price_only,
-    )
-    sold_prices = [i.price for i in sold_items if i.price is not None]
-    sold_med, sold_mean, sold_min, sold_max = _price_stats(sold_prices)
-
-    # ── Aktive Angebote (Browse API) ───────────────────────────────────────────
-    active_total, active_items, active_error = search_active(
-        query, credentials, marketplace, limit, new_only, fixed_price_only
-    )
-    act_prices = [i.price for i in active_items if i.price is not None]
-    act_med, act_mean, act_min, act_max = _price_stats(act_prices)
+    sold   = get_sold_listings(query, credentials, marketplace, limit, new_only, fixed_price_only)
+    active = get_active_listings(query, credentials, marketplace, limit, new_only, fixed_price_only)
 
     return MarketSnapshot(
-        query          = query,
-        marketplace_id = marketplace,
-        fetched_at     = ts,
-        # Sold
-        sold_total     = sold_total,
-        sold_items     = sold_items,
-        sold_median    = sold_med,
-        sold_mean      = sold_mean,
-        sold_min       = sold_min,
-        sold_max       = sold_max,
-        sold_count     = len(sold_prices),
-        sold_error     = sold_error,
-        # Active
-        active_total   = active_total,
-        active_items   = active_items,
-        active_median  = act_med,
-        active_mean    = act_mean,
-        active_min     = act_min,
-        active_max     = act_max,
-        active_count   = len(act_prices),
-        active_error   = active_error,
-        # STR
-        sell_through_rate = _calc_str(sold_total, active_total),
+        query             = query,
+        marketplace_id    = marketplace,
+        fetched_at        = ts,
+        sold              = sold,
+        active            = active,
+        sell_through_rate = _calc_str(sold.total, active.total),
     )

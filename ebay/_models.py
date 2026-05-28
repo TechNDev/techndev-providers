@@ -1,41 +1,45 @@
 #!/usr/bin/env python3
 """
-techndev-providers  ebay/_models.py  v1.0.0
+techndev-providers  ebay/_models.py  v2.0.0
 =============================================
 Datenklassen fuer den eBay-Provider.
 
 CHANGELOG
 ---------
+v2.0.0  (2026-05-28)
+  - SoldResult:   Reiches Ergebnisobjekt fuer get_sold_listings()
+                  Analog zu amazon_sp.CatalogResult / OffersResult.
+                  Felder: stats (median/mean/min/max/count), items, source, ok().
+  - ActiveResult: Reiches Ergebnisobjekt fuer get_active_listings().
+  - MarketSnapshot: aktualisiert — verwendet SoldResult + ActiveResult intern.
+  - best_price-Property auf SoldResult + ActiveResult (analog OffersResult).
+
 v1.0.0  (2026-05-25)
-  - SoldItem: Ein verkauftes eBay-Angebot (Marketplace Insights API).
-  - ActiveItem: Ein aktives eBay-Angebot (Browse API).
-  - MarketSnapshot: Kombinierter Marktpreis-Snapshot mit Sell-Through-Rate.
-    Wird von ebay.get_market_snapshot() zurueckgegeben.
-    Jede Seite (sold / active) hat eigenes error-Feld fuer graceful degradation
-    (Marketplace Insights kann eingeschraenkt verfuegbar sein).
+  - SoldItem, ActiveItem, MarketSnapshot: Basis-Datenmodelle.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from statistics import mean, median
+from typing import Optional
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Einzelne Angebote
+# Einzel-Items (unveraendert)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class SoldItem:
-    """Ein verkauftes eBay-Angebot (aus Marketplace Insights item_sales/search)."""
+    """Ein verkauftes eBay-Angebot."""
     title:          str
     price:          float | None
     currency:       str
-    sold_date:      str          # ISO-Datum (lastSoldDate)
-    condition:      str          # z.B. "New", "Used"
-    buying_options: str          # z.B. "FIXED_PRICE"
+    sold_date:      str           # Datum als Text (Scraper: 'DD. Mon YYYY'; API: ISO)
+    condition:      str           # z.B. 'New'
+    buying_options: str           # z.B. 'FIXED_PRICE'
     item_id:        str
     url:            str
 
@@ -45,7 +49,7 @@ class SoldItem:
 
 @dataclass
 class ActiveItem:
-    """Ein aktives eBay-Angebot (aus Browse API item_summary/search)."""
+    """Ein aktives eBay-Angebot (Browse API)."""
     title:          str
     price:          float | None
     currency:       str
@@ -59,6 +63,94 @@ class ActiveItem:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Reiche Ergebnisobjekte — analog amazon_sp.CatalogResult / OffersResult
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class SoldResult:
+    """
+    Ergebnis von get_sold_listings().
+    Analog zu amazon_sp.OffersResult: alle Felder haben sinnvolle Defaults,
+    kein None-Check noetig ausser fuer optionale Preis-Felder.
+    error != None signalisiert Fehler; ok() fuer schnelle Pruefung.
+
+    source: 'scraper' | 'api' (Marketplace Insights, sobald freigeschaltet)
+
+    Preisstatistiken beziehen sich auf items MIT price != None.
+    """
+    # ── Identifikation ───────────────────────────────────────────────────────
+    query:        str  = ''
+    marketplace:  str  = 'EBAY_DE'
+    fetched_at:   str  = ''
+
+    # ── Aggregat-Statistiken ─────────────────────────────────────────────────
+    total:        Optional[int]   = None   # Gesamtanzahl laut API/Scraper
+    count:        int             = 0      # Items mit Preis (Basis der Stats)
+    median_price: Optional[float] = None
+    mean_price:   Optional[float] = None
+    min_price:    Optional[float] = None
+    max_price:    Optional[float] = None
+
+    # ── Rohdata ──────────────────────────────────────────────────────────────
+    items:        list[SoldItem]  = field(default_factory=list)
+    source:       str             = 'scraper'  # 'scraper' | 'api'
+
+    # ── Status ───────────────────────────────────────────────────────────────
+    error:        Optional[str]   = None
+
+    def ok(self) -> bool:
+        """True wenn kein Fehler aufgetreten ist."""
+        return self.error is None
+
+    @property
+    def best_price(self) -> Optional[float]:
+        """Median-Preis; Fallback: Mean. Analog OffersResult.best_price."""
+        return self.median_price if self.median_price is not None else self.mean_price
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ActiveResult:
+    """
+    Ergebnis von get_active_listings().
+    Analog zu SoldResult; basiert auf Browse API (kein Special-Approval noetig).
+
+    Preisstatistiken = Marktpreis-Spiegel der aktuell aktiven Angebote.
+    """
+    # ── Identifikation ───────────────────────────────────────────────────────
+    query:        str  = ''
+    marketplace:  str  = 'EBAY_DE'
+    fetched_at:   str  = ''
+
+    # ── Aggregat-Statistiken ─────────────────────────────────────────────────
+    total:        Optional[int]   = None
+    count:        int             = 0
+    median_price: Optional[float] = None
+    mean_price:   Optional[float] = None
+    min_price:    Optional[float] = None
+    max_price:    Optional[float] = None
+
+    # ── Rohdata ──────────────────────────────────────────────────────────────
+    items:        list[ActiveItem] = field(default_factory=list)
+
+    # ── Status ───────────────────────────────────────────────────────────────
+    error:        Optional[str]    = None
+
+    def ok(self) -> bool:
+        return self.error is None
+
+    @property
+    def best_price(self) -> Optional[float]:
+        """Median-Preis; Fallback: Mean."""
+        return self.median_price if self.median_price is not None else self.mean_price
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Kombinierter Markt-Snapshot
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -66,59 +158,77 @@ class ActiveItem:
 class MarketSnapshot:
     """
     Kombinierter eBay-Markt-Snapshot: verkaufte + aktive Angebote.
+    Wird von get_market_snapshot() zurueckgegeben.
 
-    Struktur:
-      sold_*   — Daten aus Marketplace Insights API (verkaufte Angebote)
-      active_* — Daten aus Browse API (aktive Angebote)
-      sell_through_rate — sold_total / (sold_total + active_total), None wenn unbekannt
-
-    sold_error / active_error:
-      None   = Abruf erfolgreich
-      str    = Fehlermeldung (z.B. Marketplace Insights nicht freigeschaltet)
-
-    Preisstatistiken beziehen sich nur auf Angebote MIT Preis (price != None).
+    Enthaelt SoldResult + ActiveResult als Unter-Objekte sowie
+    sell_through_rate als abgeleitete Kenngroe+e.
     """
     query:          str
     marketplace_id: str
     fetched_at:     str
 
-    # Verkaufte Angebote (Marketplace Insights)
-    sold_total:     int | None          # Gesamt laut API-Antwort
-    sold_items:     list[SoldItem]
-    sold_median:    float | None
-    sold_mean:      float | None
-    sold_min:       float | None
-    sold_max:       float | None
-    sold_count:     int                 # Anzahl mit Preis (fuer Stats)
-    sold_error:     str | None
+    sold:           SoldResult    = field(default_factory=SoldResult)
+    active:         ActiveResult  = field(default_factory=ActiveResult)
 
-    # Aktive Angebote (Browse)
-    active_total:   int | None
-    active_items:   list[ActiveItem]
-    active_median:  float | None
-    active_mean:    float | None
-    active_min:     float | None
-    active_max:     float | None
-    active_count:   int
-    active_error:   str | None
+    # Abgeleitete Kenngroe+en
+    sell_through_rate: Optional[float] = None  # sold.total / (sold.total + active.total)
 
-    # Sell-Through-Rate
-    sell_through_rate: float | None     # sold_total / (sold_total + active_total)
-
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        return d
+    # Rueckwaertskompatibilitaet — direkte Zugriffe wie bisher
+    @property
+    def sold_items(self)   -> list[SoldItem]:   return self.sold.items
+    @property
+    def sold_total(self)   -> Optional[int]:    return self.sold.total
+    @property
+    def sold_median(self)  -> Optional[float]:  return self.sold.median_price
+    @property
+    def sold_mean(self)    -> Optional[float]:  return self.sold.mean_price
+    @property
+    def sold_min(self)     -> Optional[float]:  return self.sold.min_price
+    @property
+    def sold_max(self)     -> Optional[float]:  return self.sold.max_price
+    @property
+    def sold_count(self)   -> int:              return self.sold.count
+    @property
+    def sold_error(self)   -> Optional[str]:    return self.sold.error
+    @property
+    def active_items(self) -> list[ActiveItem]: return self.active.items
+    @property
+    def active_total(self) -> Optional[int]:    return self.active.total
+    @property
+    def active_median(self)-> Optional[float]:  return self.active.median_price
+    @property
+    def active_mean(self)  -> Optional[float]:  return self.active.mean_price
+    @property
+    def active_min(self)   -> Optional[float]:  return self.active.min_price
+    @property
+    def active_max(self)   -> Optional[float]:  return self.active.max_price
+    @property
+    def active_count(self) -> int:              return self.active.count
+    @property
+    def active_error(self) -> Optional[str]:    return self.active.error
 
     def ok(self) -> bool:
-        """True wenn mindestens eine Seite (sold oder active) erfolgreich."""
-        return self.sold_error is None or self.active_error is None
+        """True wenn mindestens eine Seite erfolgreich."""
+        return self.sold.ok() or self.active.ok()
+
+    def to_dict(self) -> dict:
+        return {
+            'query':             self.query,
+            'marketplace_id':    self.marketplace_id,
+            'fetched_at':        self.fetched_at,
+            'sold':              self.sold.to_dict(),
+            'active':            self.active.to_dict(),
+            'sell_through_rate': self.sell_through_rate,
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Hilfen
+# Interne Hilfen
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _price_stats(prices: list[float]) -> tuple[float | None, float | None, float | None, float | None]:
+def _price_stats(
+    prices: list[float],
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """(median, mean, min, max) fuer eine Preis-Liste. Alle None wenn leer."""
     if not prices:
         return None, None, None, None
@@ -130,17 +240,12 @@ def _price_stats(prices: list[float]) -> tuple[float | None, float | None, float
     )
 
 
-def _calc_str(sold_total: int | None, active_total: int | None) -> float | None:
-    """
-    Sell-Through-Rate: sold / (sold + active).
-    None wenn eine der Groessen unbekannt oder Divisor 0.
-    """
+def _calc_str(sold_total: Optional[int], active_total: Optional[int]) -> Optional[float]:
+    """Sell-Through-Rate: sold / (sold + active). None wenn unbekannt oder Divisor 0."""
     if sold_total is None or active_total is None:
         return None
     denom = sold_total + active_total
-    if denom == 0:
-        return None
-    return round(sold_total / denom, 4)
+    return round(sold_total / denom, 4) if denom else None
 
 
 def now_iso() -> str:

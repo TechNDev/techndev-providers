@@ -19,12 +19,66 @@ from __future__ import annotations
 
 import requests
 
-from ._auth  import get_token, is_gtin, api_base, SCOPE_BASIC
-from ._models import ActiveItem, _price_stats, now_iso
+from ._auth   import get_token, is_gtin, api_base, SCOPE_BASIC
+from ._models import ActiveItem, ActiveResult, _price_stats, now_iso
+from ._rate   import _retry, browse_limiter
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 TIMEOUT = 30
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Oeffentliche API — analog amazon_sp
+# ══════════════════════════════════════════════════════════════════════════════
+
+@_retry
+def get_active_listings(
+    query:            str,
+    credentials:      dict,
+    marketplace:      str  = 'EBAY_DE',
+    limit:            int  = 50,
+    new_only:         bool = True,
+    fixed_price_only: bool = True,
+) -> ActiveResult:
+    """
+    Aktive eBay-Angebote fuer eine EAN/GTIN oder Freitext-Query via Browse API.
+
+    Analog zu amazon_sp.get_offers():
+      Gibt immer ein ActiveResult zurueck — kein raise, kein Tuple.
+      result.ok()          → True wenn kein Fehler
+      result.best_price    → Median-Preis (Fallback: Mean)
+      result.median_price  → Median aller aktiven Preise
+      result.items         → Liste der ActiveItem-Objekte
+      result.total         → Gesamtanzahl laut eBay Browse API
+
+    Benoetigt nur SCOPE_BASIC (kein Business-Approval noetig).
+
+    query:            EAN/GTIN (z.B. '4010232075488') oder Freitext ('LEGO 75192').
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}
+    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
+    limit:            Max. Ergebnisse (1-200, Default: 50).
+    new_only:         Nur Zustand Neu (Default: True).
+    fixed_price_only: Nur Sofort-Kaufen (Default: True).
+    """
+    ts = now_iso()
+    total, items, error = search_active(query, credentials, marketplace, limit, new_only, fixed_price_only)
+    prices = [i.price for i in items if i.price is not None]
+    med, mn_mean, mn, mx = _price_stats(prices)
+
+    return ActiveResult(
+        query        = query,
+        marketplace  = marketplace,
+        fetched_at   = ts,
+        total        = total,
+        count        = len(prices),
+        median_price = med,
+        mean_price   = mn_mean,
+        min_price    = mn,
+        max_price    = mx,
+        items        = items,
+        error        = error,
+    )
 
 
 def search_active(
@@ -58,6 +112,8 @@ def search_active(
         return None, [], f"Token-Fehler: HTTP {code}"
     except Exception as e:
         return None, [], f"Token-Fehler: {e}"
+
+    browse_limiter.wait()
 
     # Filter: Browse API nutzt komma-getrenntes Format
     filters: list[str] = []

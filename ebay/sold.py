@@ -28,10 +28,68 @@ v1.0.0  (2026-05-25)
 """
 from __future__ import annotations
 
-from ._models import SoldItem
+from ._models import SoldItem, SoldResult, _price_stats, now_iso
+from ._rate   import _retry, scraper_limiter
 from .scraper import scrape_sold
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Oeffentliche API — analog amazon_sp
+# ══════════════════════════════════════════════════════════════════════════════
+
+@_retry
+def get_sold_listings(
+    query:            str,
+    credentials:      dict,
+    marketplace:      str  = 'EBAY_DE',
+    limit:            int  = 50,
+    new_only:         bool = True,
+    fixed_price_only: bool = True,
+) -> SoldResult:
+    """
+    Verkaufte eBay-Angebote fuer eine EAN/GTIN oder Freitext-Query.
+
+    Analog zu amazon_sp.search_by_ean():
+      Gibt immer ein SoldResult zurueck — kein raise, kein Tuple.
+      result.ok()          → True wenn kein Fehler
+      result.best_price    → Median-Preis (Fallback: Mean)
+      result.median_price  → Median aller verkauften Preise
+      result.items         → Liste der SoldItem-Objekte
+      result.total         → Gesamtanzahl laut eBay
+      result.source        → 'scraper' | 'api'
+
+    Primary:  HTML-Scraper (scraper.scrape_sold).
+    Backlog:  Marketplace Insights API (_search_sold_api) — nach Business Approval.
+
+    query:            EAN/GTIN (z.B. '4010232075488') oder Freitext ('LEGO 75192').
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}
+    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
+    limit:            Max. Ergebnisse (1-200, Default: 50).
+    new_only:         Nur Zustand Neu (Default: True).
+    fixed_price_only: Nur Sofort-Kaufen (Default: True).
+    """
+    ts = now_iso()
+    scraper_limiter.wait()
+    total, items, error = scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
+    prices = [i.price for i in items if i.price is not None]
+    med, mn_mean, mn, mx = _price_stats(prices)
+
+    return SoldResult(
+        query        = query,
+        marketplace  = marketplace,
+        fetched_at   = ts,
+        total        = total,
+        count        = len(prices),
+        median_price = med,
+        mean_price   = mn_mean,
+        min_price    = mn,
+        max_price    = mx,
+        items        = items,
+        source       = 'scraper',
+        error        = error,
+    )
 
 
 def search_sold(
