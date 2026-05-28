@@ -32,6 +32,9 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.1.2  (2026-05-28)
+  - eBay: Fallback auf Produkttitel auch bei 0 Ergebnissen (nicht nur Bot-Challenge).
+
 v0.1.1  (2026-05-28)
   - eBay: Fallback auf Produkttitel wenn EAN-Suche Bot-Challenge ausloest.
 
@@ -58,7 +61,7 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -250,9 +253,13 @@ def evaluate_arbitrage(
             try:
                 snap = get_market_snapshot(query, ebay_credentials, ebay_marketplace)
 
-                # EAN-Suche kann eine Bot-Challenge ausloesen (Session invalide).
-                # Fallback: Produkttitel verwenden, falls vorhanden und verschieden.
-                if not snap.ok() and query == ean and res.title and res.title != ean:
+                # EAN-Suche liefert manchmal 0 Treffer oder eine Bot-Challenge.
+                # Fallback: Produkttitel verwenden wenn EAN keine Ergebnisse bringt.
+                _ean_empty = (
+                    not snap.ok()
+                    or (snap.sold.count == 0 and snap.active.total == 0)
+                )
+                if _ean_empty and query == ean and res.title and res.title != ean:
                     snap  = get_market_snapshot(res.title, ebay_credentials, ebay_marketplace)
                     query = res.title
 
