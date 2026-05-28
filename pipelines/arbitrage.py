@@ -32,6 +32,12 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.2.0  (2026-05-28)
+  - EU-Markt-Vergleich: eu_marketplaces + fx_to_eur Parameter. Je Markt
+    (UK/FR/ES/IT) Rank + Buy-Box + Gebuehren (laenderspezifische MwSt) -> Preis,
+    Profit und ROI in EUR (GBP via fx_to_eur umgerechnet). ArbitrageResult.eu_markets.
+  - ArbitrageResult.image: Hauptbild-URL aus dem Katalog (SP-API).
+
 v0.1.2  (2026-05-28)
   - eBay: Fallback auf Produkttitel auch bei 0 Ergebnissen (nicht nur Bot-Challenge).
 
@@ -61,7 +67,18 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
+
+# ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
+# MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
+_MARKET_VAT: dict[str, float] = {
+    'DE': 0.19, 'FR': 0.20, 'ES': 0.21, 'IT': 0.22, 'UK': 0.20,
+}
+_MARKET_CURRENCY: dict[str, str] = {
+    'DE': 'EUR', 'FR': 'EUR', 'ES': 'EUR', 'IT': 'EUR', 'UK': 'GBP',
+}
+# Standard-EU-Vergleichsmaerkte (ohne Heimatmarkt; der wird im Hauptlauf bewertet).
+DEFAULT_EU_MARKETPLACES = ['UK', 'FR', 'ES', 'IT']
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -85,9 +102,11 @@ class ArbitrageResult:
     asin:          Optional[str] = None
     title:         str = ''
     category:      str = ''
+    image:         str = ''
     ek_netto:      float = 0.0
     amazon_offer:  Optional[dict] = None
     ebay_snapshot: Optional[dict] = None
+    eu_markets:    list[dict] = field(default_factory=list)
     results:       dict[str, PlatformResult] = field(default_factory=dict)
     errors:        list[str] = field(default_factory=list)
 
@@ -114,6 +133,8 @@ def evaluate_arbitrage(
     include_ebay:       bool = True,
     mwst_rate:          float = 0.19,
     ebay_shipping_cost: float = 6.0,
+    eu_marketplaces:    Optional[list[str]] = None,
+    fx_to_eur:          Optional[dict[str, float]] = None,
 ) -> ArbitrageResult:
     """
     Bewertet den Wiederverkauf eines Produkts auf Amazon (FBA) und eBay.
@@ -129,6 +150,11 @@ def evaluate_arbitrage(
     ebay_credentials:    {client_id, client_secret, env} — None → eBay uebersprungen.
     profile:             reseller_profitability-Profil ('standard'|'eol_lego'|'high_margin').
     ebay_shipping_cost:  Versandkosten-Basis fuer die eBay-Gebuehrenrechnung (Default 6 €).
+    eu_marketplaces:     Liste weiterer Amazon-EU-Maerkte fuer den Vergleich (z.B.
+                         ['UK','FR','ES','IT']). None/[] → kein EU-Vergleich.
+    fx_to_eur:           Wechselkurse {Waehrung: EUR-Wert je 1 Einheit}, z.B.
+                         {'GBP': 1.1538}. EUR braucht keinen Eintrag. Fehlt ein
+                         benoetigter Kurs, wird der Markt ohne Profit gelistet.
 
     Rueckgabe: ArbitrageResult.
     """
@@ -153,6 +179,7 @@ def evaluate_arbitrage(
             res.asin = asin = cat.asin
         res.title    = cat.title
         res.category = category = cat.category
+        res.image    = cat.main_image
         bsr          = cat.bsr
         rating       = cat.rating
         review_count = cat.review_count
@@ -303,4 +330,130 @@ def evaluate_arbitrage(
         except Exception as e:                               # noqa: BLE001
             res.errors.append(f"qualify: {type(e).__name__}: {e}")
 
+    # ── 5. EU-Markt-Vergleich (optional) ─────────────────────────────────────────
+    if asin and eu_marketplaces:
+        res.eu_markets = _evaluate_eu_markets(
+            asin               = asin,
+            ek_netto           = res.ek_netto,
+            amazon_credentials = amazon_credentials,
+            marketplaces       = eu_marketplaces,
+            fx_to_eur          = fx_to_eur or {},
+            home_marketplace   = marketplace,
+            errors             = res.errors,
+        )
+
     return res
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EU-Markt-Vergleich
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _evaluate_eu_markets(
+    *,
+    asin:               str,
+    ek_netto:           float,
+    amazon_credentials: dict,
+    marketplaces:       list[str],
+    fx_to_eur:          dict[str, float],
+    home_marketplace:   str,
+    errors:             list[str],
+) -> list[dict]:
+    """
+    Bewertet dieselbe ASIN auf weiteren Amazon-EU-Maerkten.
+
+    Je Markt: Rank (Katalog) + Buy-Box (Offers) + Amazon-Gebuehren (Fees, mit
+    laenderspezifischem MwSt-Satz). Preis und Profit werden ueber fx_to_eur nach
+    EUR umgerechnet; der EK (bereits EUR netto) ist marktuebergreifend gleich.
+
+    Einzel-Marktfehler landen in 'errors' und brechen den Lauf nicht ab.
+    Heimatmarkt wird uebersprungen (bereits im Hauptlauf bewertet).
+    """
+    out: list[dict] = []
+    home = home_marketplace.upper()
+
+    for code in marketplaces:
+        mp = code.upper()
+        if mp == home:
+            continue
+
+        vat      = _MARKET_VAT.get(mp, 0.20)
+        currency = _MARKET_CURRENCY.get(mp, 'EUR')
+        fx       = 1.0 if currency == 'EUR' else fx_to_eur.get(currency)
+
+        entry: dict = {
+            'marketplace':        mp,
+            'currency':           currency,
+            'fx_to_eur':          fx,
+            'bsr':                None,
+            'price_local_brutto': None,
+            'price_eur_brutto':   None,
+            'fees_netto_eur':     None,
+            'profit_eur':         None,
+            'roi':                None,
+            'amazon_on_listing':  False,
+            'price_source':       '',
+            'note':               '',
+        }
+
+        try:
+            # Rank (best effort — Fehler hier ist nicht fatal).
+            try:
+                cat = search_by_asin(asin, amazon_credentials, mp)
+                if cat.ok():
+                    entry['bsr'] = cat.bsr
+            except Exception as e:                           # noqa: BLE001
+                errors.append(f"eu:{mp}:catalog: {type(e).__name__}: {e}")
+
+            offers = get_offers(asin, amazon_credentials, mp)
+            if offers.error:
+                errors.append(f"eu:{mp}:offers: {offers.error}")
+            entry['amazon_on_listing'] = offers.amazon_on_listing
+            price_local = offers.best_price
+            entry['price_local_brutto'] = price_local
+            entry['price_source'] = (
+                'buy_box'    if offers.buy_box_price is not None else
+                'lowest_new' if offers.lowest_new_price is not None else
+                offers.price_source or ''
+            )
+
+            if price_local is None:
+                entry['note'] = 'kein Preis verfuegbar'
+                out.append(entry)
+                continue
+
+            # Waehrung nicht umrechenbar → Markt ohne Profit listen.
+            if fx is None:
+                entry['note'] = f'kein Wechselkurs fuer {currency}'
+                out.append(entry)
+                continue
+
+            entry['price_eur_brutto'] = round(price_local * fx, 2)
+
+            breakdown = get_fees_breakdown(
+                asin, price_local, amazon_credentials, mp, mwst_pct=vat * 100,
+            )
+            if breakdown is None:
+                fee_err = get_last_fee_error()
+                if fee_err:
+                    errors.append(f"eu:{mp}:fees: {fee_err}")
+                entry['note'] = 'keine Gebuehrenschaetzung'
+                out.append(entry)
+                continue
+
+            fees_local_netto = breakdown.get('total', 0.0)
+            vk_local_netto   = price_local / (1 + vat)
+            profit_eur       = round((vk_local_netto - fees_local_netto) * fx - ek_netto, 2)
+
+            entry['fees_netto_eur'] = round(fees_local_netto * fx, 2)
+            entry['profit_eur']     = profit_eur
+            entry['roi']            = round(profit_eur / ek_netto, 4) if ek_netto else None
+
+        except Exception as e:                               # noqa: BLE001
+            errors.append(f"eu:{mp}: {type(e).__name__}: {e}")
+            if not entry['note']:
+                entry['note'] = 'Fehler beim Abruf'
+
+        out.append(entry)
+
+    return out
