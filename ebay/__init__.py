@@ -30,13 +30,19 @@ Hinweis Sold-Daten:
   Die Marketplace Insights API (buy.marketplace.insights) ist als Backlog
   in sold._search_sold_api() hinterlegt — Reaktivierung nach Business Approval.
 """
-from ._models  import SoldItem, ActiveItem, MarketSnapshot, now_iso, _price_stats, _calc_str
-from ._auth    import get_token, SCOPE_BASIC, SCOPE_SOLD
-from .sold     import search_sold
-from .browse   import search_active
-from .scraper  import scrape_sold
+from ._models   import SoldItem, ActiveItem, MarketSnapshot, now_iso, _price_stats, _calc_str
+from ._auth     import get_token, get_user_token, make_oauth_url, SCOPE_BASIC, SCOPE_SOLD, SCOPE_ANALYTICS
+from .sold      import search_sold
+from .browse    import search_active
+from .scraper   import scrape_sold
+from .analytics import (
+    get_traffic_report, get_seller_standards,
+    TrafficRow, TrafficReport, SellerStandards, StandardsMetric,
+    ALL_METRICS, DEFAULT_METRICS,
+)
 
 __all__ = [
+    # Marktdaten
     "SoldItem",
     "ActiveItem",
     "MarketSnapshot",
@@ -44,11 +50,24 @@ __all__ = [
     "search_sold",
     "search_active",
     "scrape_sold",
+    # Analytics (User-Token erforderlich)
+    "get_traffic_report",
+    "get_seller_standards",
+    "TrafficRow",
+    "TrafficReport",
+    "SellerStandards",
+    "StandardsMetric",
+    "ALL_METRICS",
+    "DEFAULT_METRICS",
+    # Auth
     "get_token",
+    "get_user_token",
+    "make_oauth_url",
     "SCOPE_BASIC",
     "SCOPE_SOLD",
+    "SCOPE_ANALYTICS",
 ]
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 
 def get_market_snapshot(
