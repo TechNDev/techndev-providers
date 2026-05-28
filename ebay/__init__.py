@@ -128,12 +128,13 @@ __all__ = [
 
 
 def get_market_snapshot(
-    query:            str,
-    credentials:      dict,
-    marketplace:      str  = 'EBAY_DE',
-    limit:            int  = 50,
-    new_only:         bool = True,
-    fixed_price_only: bool = True,
+    query:             str,
+    credentials:       dict,
+    marketplace:       str        = 'EBAY_DE',
+    limit:             int        = 50,
+    new_only:          bool       = True,
+    fixed_price_only:  bool       = True,
+    min_price_filter:  float | None = None,
 ) -> MarketSnapshot:
     """
     Kombinierter eBay-Markt-Snapshot: sold + active in einem Aufruf.
@@ -147,6 +148,8 @@ def get_market_snapshot(
     limit:            Max. Ergebnisse pro Seite (1-200, Default: 50).
     new_only:         Nur Zustand Neu.
     fixed_price_only: Nur Sofort-Kaufen.
+    min_price_filter: Preisuntergrenze fuer Sold-Items (Ausreisser-Filter).
+                      None = kein Filter (Default).
 
     Rueckgabe: MarketSnapshot
       .sold              → SoldResult  (Scraper)
@@ -156,7 +159,7 @@ def get_market_snapshot(
     """
     ts = now_iso()
 
-    sold   = get_sold_listings(query, credentials, marketplace, limit, new_only, fixed_price_only)
+    sold   = get_sold_listings(query, credentials, marketplace, limit, new_only, fixed_price_only, min_price_filter)
     active = get_active_listings(query, credentials, marketplace, limit, new_only, fixed_price_only)
 
     return MarketSnapshot(

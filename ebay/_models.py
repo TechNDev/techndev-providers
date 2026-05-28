@@ -95,6 +95,9 @@ class SoldResult:
     items:        list[SoldItem]  = field(default_factory=list)
     source:       str             = 'scraper'  # 'scraper' | 'api'
 
+    # ── Ausreisser-Filter ────────────────────────────────────────────────────
+    filtered_count: int = 0        # Anzahl gefilterter Items (price < min_price_filter)
+
     # ── Status ───────────────────────────────────────────────────────────────
     error:        Optional[str]   = None
 
