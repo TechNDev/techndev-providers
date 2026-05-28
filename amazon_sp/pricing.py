@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-amazon_sp  pricing.py  v1.0.0
+amazon_sp  pricing.py  v1.1.0
 ================================
 Angebote, Buy-Box-Preis und Wettbewerbspreise via ProductsV0 API.
 
@@ -10,6 +10,10 @@ Merges beider bisheriger Implementierungen:
 
 CHANGELOG
 ---------
+v1.1.0  (2026-05-29)
+  - OffersResult.offers_detail: aktueller Angebots-Snapshot je Seller
+    (Landed-Preis, FBA/FBM, Buy-Box-Gewinner, Feedback) fuer Buy-Box-Tracking.
+
 v1.0.0  (2026-05-25)
   - Initiales Release
   - OffersResult: Datenmodell mit Seller-Anzahl, Buy-Box, FBA, Dominanz
@@ -18,7 +22,7 @@ v1.0.0  (2026-05-25)
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from sp_api.api import ProductsV0
@@ -26,7 +30,7 @@ from sp_api.api import ProductsV0
 from ._rate import _retry, pricing_limiter
 from ._helpers import get_marketplace, get_marketplace_id, get_amazon_seller_id
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -46,6 +50,9 @@ class OffersResult:
     amazon_on_listing: bool            = False
     buy_box_dominant:  bool            = False
     price_source:      str             = ''     # 'offers' | 'competitive' | ''
+    # Aktueller Angebots-Snapshot (max. 20, API-Limit). Je Eintrag:
+    # {seller_id, price (landed), is_fba, is_buy_box_winner, feedback_count, feedback_pct}
+    offers_detail:     list            = field(default_factory=list)
     error:             Optional[str]   = None
 
     def ok(self) -> bool:
@@ -121,6 +128,24 @@ def get_offers(
         winner_count      = sum(1 for o in offers if o.get('IsBuyBoxWinner'))
         buy_box_dominant  = winner_count == 1 and total_new >= 3
 
+        # ── Angebots-Snapshot (Seller, Landed-Preis, FBA/FBM, Buy-Box, Feedback) ──
+        offers_detail = []
+        for o in offers:
+            lp   = (o.get('ListingPrice') or {}).get('Amount')
+            ship = (o.get('Shipping') or {}).get('Amount') or 0.0
+            fb   = o.get('SellerFeedbackRating') or {}
+            offers_detail.append({
+                'seller_id':         o.get('SellerId'),
+                'price':             round(float(lp) + float(ship), 2) if lp is not None else None,
+                'is_fba':            bool(o.get('IsFulfilledByAmazon')),
+                'is_buy_box_winner': bool(o.get('IsBuyBoxWinner')),
+                'feedback_count':    fb.get('FeedbackCount'),
+                'feedback_pct':      fb.get('SellerPositiveFeedbackRating'),
+            })
+        # Buy-Box-Gewinner zuerst, dann nach Landed-Preis aufsteigend.
+        offers_detail.sort(key=lambda x: (not x['is_buy_box_winner'],
+                                          x['price'] if x['price'] is not None else 9e9))
+
         # ── CompetitivePricing-Fallback wenn kein Buy-Box-Preis ───────────────
         source = 'offers'
         if buy_box_price is None:
@@ -137,6 +162,7 @@ def get_offers(
             amazon_on_listing=amazon_on_listing,
             buy_box_dominant=buy_box_dominant,
             price_source=source,
+            offers_detail=offers_detail,
         )
 
     except Exception as e:

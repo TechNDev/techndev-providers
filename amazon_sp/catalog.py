@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-amazon_sp  catalog.py  v1.0.0
+amazon_sp  catalog.py  v1.1.0
 ================================
 EAN / ASIN -> Produktdaten via Amazon CatalogItems API v2022-04-01.
 
@@ -15,6 +15,10 @@ Amazon indiziert Bundles/Multipacks je nach Produkt nur unter einem dieser Typen
 
 CHANGELOG
 ---------
+v1.1.0  (2026-05-29)
+  - Variations: includedData 'relationships' + CatalogResult.parent_asins/
+    child_asins + has_variations-Property (_parse_relationships).
+
 v1.0.0  (2026-05-25)
   - Initiales Release
   - CatalogResult: vereinheitlichtes Datenmodell mit allen Feldern beider Tools
@@ -55,6 +59,7 @@ _ATTR_LABELS: dict[str, str] = {
 _INCLUDED_ALL = [
     'summaries', 'images', 'attributes',
     'classifications', 'identifiers', 'dimensions', 'salesRanks',
+    'relationships',
 ]
 
 
@@ -120,8 +125,17 @@ class CatalogResult:
     rating:       Optional[float] = None
     review_count: int = 0
 
+    # ── Variations (Parent/Child-ASINs) ───────────────────────────────────────
+    parent_asins: list[str] = field(default_factory=list)
+    child_asins:  list[str] = field(default_factory=list)
+
     # ── Fehler ───────────────────────────────────────────────────────────────
     error: Optional[str] = None
+
+    @property
+    def has_variations(self) -> bool:
+        """True wenn die ASIN Teil einer Variationsfamilie ist (Parent oder Childs)."""
+        return bool(self.parent_asins or self.child_asins)
 
     @property
     def name(self) -> str:
@@ -318,6 +332,9 @@ def _parse_item(item: dict, ean: str, mktpl_id: str) -> CatalogResult:
     # ── Bewertung ────────────────────────────────────────────────────────────
     rating, review_count = _parse_rating(attrs)
 
+    # ── Variations (Parent/Child) ─────────────────────────────────────────────
+    parent_asins, child_asins = _parse_relationships(item.get('relationships') or [], mktpl_id)
+
     return CatalogResult(
         ean=ean,
         asin=asin,
@@ -344,6 +361,8 @@ def _parse_item(item: dict, ean: str, mktpl_id: str) -> CatalogResult:
         bsr_class_ranks=class_ranks,
         rating=rating,
         review_count=review_count,
+        parent_asins=parent_asins,
+        child_asins=child_asins,
         error=None,
     )
 
@@ -416,6 +435,29 @@ def _parse_sales_ranks(
     if bsr_class is not None:
         return bsr_class, bsr_class_cat, None, '', disp_ranks, class_ranks
     return None, '', None, '', [], []
+
+
+def _parse_relationships(relationships: list, mktpl_id: str) -> tuple[list[str], list[str]]:
+    """
+    Parent-/Child-ASINs aus dem relationships-Block extrahieren.
+    Sucht zuerst den marktplatz-spezifischen Eintrag, Fallback: erster verfuegbarer.
+    """
+    target = None
+    for r in relationships:
+        if r.get('marketplaceId') == mktpl_id:
+            target = r
+            break
+    if target is None and relationships:
+        target = relationships[0]
+
+    parents: list[str] = []
+    children: list[str] = []
+    if target:
+        for rel in target.get('relationships', []):
+            parents.extend(rel.get('parentAsins') or [])
+            children.extend(rel.get('childAsins') or [])
+    # Duplikate entfernen, Reihenfolge erhalten
+    return list(dict.fromkeys(parents)), list(dict.fromkeys(children))
 
 
 def _parse_rating(attributes: dict) -> tuple[Optional[float], int]:

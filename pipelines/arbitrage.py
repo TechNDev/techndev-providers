@@ -32,6 +32,10 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.4.0  (2026-05-29)
+  - Variations: ArbitrageResult.parent_asins/child_asins aus dem Katalog.
+  - amazon_offer.offers_detail: aktueller Angebots-Snapshot fuer Buy-Box-Tracking.
+
 v0.3.0  (2026-05-29)
   - FBA-Marge realistischer: Verkaeufer-Nebenkosten (Storage/Prep/Inbound) ueber
     total_all_in eingerechnet statt verworfen (vorher zu optimistisch). EU-Loop
@@ -78,7 +82,7 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
 # MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
@@ -115,6 +119,8 @@ class ArbitrageResult:
     title:         str = ''
     category:      str = ''
     image:         str = ''
+    parent_asins:  list[str] = field(default_factory=list)
+    child_asins:   list[str] = field(default_factory=list)
     ek_netto:      float = 0.0
     amazon_offer:  Optional[dict] = None
     ebay_snapshot: Optional[dict] = None
@@ -189,9 +195,11 @@ def evaluate_arbitrage(
             res.errors.append(f"catalog: {cat.error}")
         if cat.asin:
             res.asin = asin = cat.asin
-        res.title    = cat.title
-        res.category = category = cat.category
-        res.image    = cat.main_image
+        res.title        = cat.title
+        res.category     = category = cat.category
+        res.image        = cat.main_image
+        res.parent_asins = cat.parent_asins
+        res.child_asins  = cat.child_asins
         bsr          = cat.bsr
         rating       = cat.rating
         review_count = cat.review_count
@@ -272,6 +280,7 @@ def evaluate_arbitrage(
                 'amazon_on_listing': offers.amazon_on_listing,
                 'buy_box_dominant':  offers.buy_box_dominant,
                 'price_source':      price_source,
+                'offers_detail':     offers.offers_detail,
             }
 
             if buy_box is not None:

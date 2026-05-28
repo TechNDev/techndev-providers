@@ -1,5 +1,5 @@
 """
-amazon_sp  v1.3.0
+amazon_sp  v1.4.0
 ==================
 Amazon Selling Partner API Provider fuer TechNDev Tools.
 Gemeinsame Bibliothek fuer EAN2JTL und amz-einkauf.
@@ -29,7 +29,7 @@ from .pricing      import OffersResult, get_offers, get_item_price
 from .fees         import estimate_fba_fees, get_fees_breakdown, get_last_fee_error
 from .restrictions import check_restrictions
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 __all__ = [
     # Datenmodelle
