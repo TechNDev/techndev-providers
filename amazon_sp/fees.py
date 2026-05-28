@@ -7,10 +7,14 @@ Extrahiert aus amz-einkauf data_collector._add_fees.
 
 CHANGELOG
 ---------
+v1.5.0  (2026-05-28)
+  - get_fees_breakdown(): ek_price-Parameter + Margenberechnung.
+    Rückgabe enthält profit, profit_pct (Nettomarge) und roi.
+
 v1.4.0  (2026-05-28)
   - get_fees_breakdown(): MwSt-Berechnung ergänzt (mwst_pct, Default 19 %).
     Rückgabe enthält price_net, vat_on_price, vat_on_fees, total_all_in
-    jetzt auf Basis Nettoproeis.
+    jetzt auf Basis Nettopreis.
 
 v1.3.0  (2026-05-28)
   - get_fees_breakdown(): Pauschale Verkäuferkosten als Parameter ergänzt:
@@ -43,7 +47,7 @@ from sp_api.api import ProductFees
 from ._rate import _retry, pricing_limiter
 from ._helpers import get_marketplace, get_marketplace_id
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 # ── Thread-lokaler Fehlerspeicher ─────────────────────────────────────────────
 # get_last_fee_error() gibt den Fehler des letzten gescheiterten Aufrufs zurueck.
@@ -130,6 +134,7 @@ def get_fees_breakdown(
     prep_fee: float = 0.50,
     inbound_fee: float = 1.00,
     mwst_pct: float = 19.0,
+    ek_price: float = 0.0,
 ) -> Optional[dict]:
     """
     Detaillierte Gebührenaufschlüsselung für eine ASIN.
@@ -142,6 +147,7 @@ def get_fees_breakdown(
         prep_fee             Prep-/Vorbereitungskosten       (Default: 0,50 €)
         inbound_fee          Transport du → Amazon-Lager     (Default: 1,00 €)
         mwst_pct             MwSt-Satz in Prozent            (Default: 19,0 %)
+        ek_price             Einkaufspreis (netto)            (Default: 0,00 €)
 
     Rückgabe-Dict:
         {
@@ -164,8 +170,12 @@ def get_fees_breakdown(
             "prep_fee":             float,   # Prep
             "inbound_fee":          float,   # Inbound-Transport
             "seller_costs":         float,   # Summe Verkäuferkosten
-            # Gesamt
+            # Gesamt & Marge
             "total_all_in":         float,   # Amazon (netto) + Verkäuferkosten
+            "ek_price":             float,   # Einkaufspreis (netto)
+            "profit":               float,   # Netto-Erlös - all-in - EK
+            "profit_pct":           float,   # profit / price_net * 100
+            "roi":                  float,   # profit / ek_price * 100 (0 wenn kein EK)
             "details": [...],
             "error": None | str,
         }
@@ -241,6 +251,10 @@ def get_fees_breakdown(
         price_net    = round(float(price) - vat_on_price,               2)
         vat_on_fees  = round(amazon_total * vat_rate,                   2)
         seller_costs = round(storage_fee_monthly + prep_fee + inbound_fee, 2)
+        total_all_in = round(amazon_total + seller_costs,                2)
+        profit       = round(price_net - total_all_in - ek_price,        2)
+        profit_pct   = round(profit / price_net * 100, 2) if price_net else 0.0
+        roi          = round(profit / ek_price * 100,  2) if ek_price  else 0.0
 
         return {
             'price_gross':          round(float(price),                    2),
@@ -258,7 +272,11 @@ def get_fees_breakdown(
             'prep_fee':             round(prep_fee,                        2),
             'inbound_fee':          round(inbound_fee,                     2),
             'seller_costs':         seller_costs,
-            'total_all_in':         round(amazon_total + seller_costs,     2),
+            'total_all_in':         total_all_in,
+            'ek_price':             round(ek_price,                        2),
+            'profit':               profit,
+            'profit_pct':           profit_pct,
+            'roi':                  roi,
             'details':              details,
             'error':                None,
         }
