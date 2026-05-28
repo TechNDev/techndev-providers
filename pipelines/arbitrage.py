@@ -32,6 +32,17 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.3.0  (2026-05-29)
+  - FBA-Marge realistischer: Verkaeufer-Nebenkosten (Storage/Prep/Inbound) ueber
+    total_all_in eingerechnet statt verworfen (vorher zu optimistisch). EU-Loop
+    nutzt ebenfalls total_all_in.
+  - amazon_offer.estimated_payout: Amazon-Auszahlung (VK abzgl. Amazon-Gebuehren
+    brutto), analog SellerAmp "Estimated Amz. Payout".
+
+v0.2.1  (2026-05-29)
+  - EU-Vergleich: Heimatmarkt nicht mehr uebersprungen — steht jetzt als
+    Basiszeile in eu_markets (DE in DEFAULT_EU_MARKETPLACES aufgenommen).
+
 v0.2.0  (2026-05-28)
   - EU-Markt-Vergleich: eu_marketplaces + fx_to_eur Parameter. Je Markt
     (UK/FR/ES/IT) Rank + Buy-Box + Gebuehren (laenderspezifische MwSt) -> Preis,
@@ -67,7 +78,7 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
 # MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
@@ -77,8 +88,9 @@ _MARKET_VAT: dict[str, float] = {
 _MARKET_CURRENCY: dict[str, str] = {
     'DE': 'EUR', 'FR': 'EUR', 'ES': 'EUR', 'IT': 'EUR', 'UK': 'GBP',
 }
-# Standard-EU-Vergleichsmaerkte (ohne Heimatmarkt; der wird im Hauptlauf bewertet).
-DEFAULT_EU_MARKETPLACES = ['UK', 'FR', 'ES', 'IT']
+# Standard-EU-Vergleichsmaerkte inkl. DE als Basiszeile (konsistente Methode ueber
+# alle Maerkte; der Hauptlauf bewertet DE zusaetzlich detailliert mit Gates/Profil).
+DEFAULT_EU_MARKETPLACES = ['DE', 'UK', 'FR', 'ES', 'IT']
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -195,9 +207,10 @@ def evaluate_arbitrage(
                 res.errors.append(f"offers: {offers.error}")
 
             # VK = Buy-Box-Preis, Fallback niedrigster Neupreis (amz-einkauf-Standard).
-            buy_box       = offers.best_price
-            fba_fee_netto = None
-            referral_pct  = get_referral_pct(category)
+            buy_box          = offers.best_price
+            fba_fee_netto    = None
+            estimated_payout = None
+            referral_pct     = get_referral_pct(category)
 
             # Herkunft des Preises kennzeichnen (fuer die Anzeige).
             if offers.buy_box_price is not None:
@@ -216,8 +229,14 @@ def evaluate_arbitrage(
                 )
                 if breakdown is not None:
                     referral_fee  = breakdown.get('referral_fee', 0.0)
-                    total_fee     = breakdown.get('total', 0.0)
-                    fba_fee_netto = round(total_fee - referral_fee, 2)
+                    # total_all_in = Amazon-Gebuehren (netto) + Verkaeufer-Nebenkosten
+                    # (Storage/Prep/Inbound). Ohne diese waere die Marge zu optimistisch.
+                    total_all_in  = breakdown.get('total_all_in', breakdown.get('total', 0.0))
+                    fba_fee_netto = round(total_all_in - referral_fee, 2)
+                    # Amazon-Auszahlung: VK abzgl. reiner Amazon-Gebuehren brutto
+                    # (Referral+FBA+Closing inkl. MwSt) — Nebenkosten zahlt der Haendler selbst.
+                    amazon_fees_net  = breakdown.get('total', 0.0)
+                    estimated_payout = round(buy_box - amazon_fees_net * (1 + mwst_rate), 2)
                     if vk_netto > 0 and referral_fee > 0:
                         referral_pct = round(referral_fee / vk_netto, 4)
                 else:
@@ -241,6 +260,7 @@ def evaluate_arbitrage(
                 'asin':              asin,
                 'buy_box_brutto':    buy_box,
                 'fba_fee_netto':     fba_fee_netto,
+                'estimated_payout':  estimated_payout,
                 'referral_pct':      referral_pct,
                 'bsr':               bsr,
                 'rating':            rating,
@@ -338,7 +358,6 @@ def evaluate_arbitrage(
             amazon_credentials = amazon_credentials,
             marketplaces       = eu_marketplaces,
             fx_to_eur          = fx_to_eur or {},
-            home_marketplace   = marketplace,
             errors             = res.errors,
         )
 
@@ -356,26 +375,22 @@ def _evaluate_eu_markets(
     amazon_credentials: dict,
     marketplaces:       list[str],
     fx_to_eur:          dict[str, float],
-    home_marketplace:   str,
     errors:             list[str],
 ) -> list[dict]:
     """
-    Bewertet dieselbe ASIN auf weiteren Amazon-EU-Maerkten.
+    Bewertet dieselbe ASIN auf den uebergebenen Amazon-Maerkten (inkl. DE, wenn
+    gelistet — dient als Basiszeile fuer den Vergleich).
 
     Je Markt: Rank (Katalog) + Buy-Box (Offers) + Amazon-Gebuehren (Fees, mit
     laenderspezifischem MwSt-Satz). Preis und Profit werden ueber fx_to_eur nach
     EUR umgerechnet; der EK (bereits EUR netto) ist marktuebergreifend gleich.
 
     Einzel-Marktfehler landen in 'errors' und brechen den Lauf nicht ab.
-    Heimatmarkt wird uebersprungen (bereits im Hauptlauf bewertet).
     """
     out: list[dict] = []
-    home = home_marketplace.upper()
 
     for code in marketplaces:
         mp = code.upper()
-        if mp == home:
-            continue
 
         vat      = _MARKET_VAT.get(mp, 0.20)
         currency = _MARKET_CURRENCY.get(mp, 'EUR')
@@ -441,7 +456,7 @@ def _evaluate_eu_markets(
                 out.append(entry)
                 continue
 
-            fees_local_netto = breakdown.get('total', 0.0)
+            fees_local_netto = breakdown.get('total_all_in', breakdown.get('total', 0.0))
             vk_local_netto   = price_local / (1 + vat)
             profit_eur       = round((vk_local_netto - fees_local_netto) * fx - ek_netto, 2)
 

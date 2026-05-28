@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-amazon_sp  fees.py  v1.2.0
+amazon_sp  fees.py  v1.6.0
 ============================
 FBA-Gebuehrenschaetzung via Product Fees API.
 Extrahiert aus amz-einkauf data_collector._add_fees.
 
 CHANGELOG
 ---------
+v1.6.0  (2026-05-29)
+  - get_fees_breakdown(): Retry (bis 3x, Backoff) bei transienten Fees-API-
+    Fehlern (Status ServerError/ClientError ohne TotalFeesEstimate.Amount).
+
 v1.5.0  (2026-05-28)
   - get_fees_breakdown(): ek_price-Parameter + Margenberechnung.
     Rückgabe enthält profit, profit_pct (Nettomarge) und roi.
@@ -40,6 +44,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from typing import Optional
 
 from sp_api.api import ProductFees
@@ -47,7 +52,7 @@ from sp_api.api import ProductFees
 from ._rate import _retry, pricing_limiter
 from ._helpers import get_marketplace, get_marketplace_id
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 # ── Thread-lokaler Fehlerspeicher ─────────────────────────────────────────────
 # get_last_fee_error() gibt den Fehler des letzten gescheiterten Aufrufs zurueck.
@@ -188,21 +193,29 @@ def get_fees_breakdown(
     mktpl_id = get_marketplace_id(marketplace)
 
     try:
-        pricing_limiter.wait()
-        api  = ProductFees(credentials=credentials, marketplace=mktpl)
-        resp = api.get_product_fees_estimate_for_asin(
-            asin,
-            price=float(price),
-            currency='EUR',
-            is_fba=True,
-            marketplace_id=mktpl_id,
-        )
-        result = (resp.payload or {}).get('FeesEstimateResult', {})
-        estimate = result.get('FeesEstimate', {})
-
-        total_raw = estimate.get('TotalFeesEstimate', {}).get('Amount')
-        if total_raw is None:
-            err = f"TotalFeesEstimate.Amount fehlt (Status: {result.get('Status', '?')})"
+        estimate  = {}
+        total_raw = None
+        for attempt in range(3):
+            pricing_limiter.wait()
+            api  = ProductFees(credentials=credentials, marketplace=mktpl)
+            resp = api.get_product_fees_estimate_for_asin(
+                asin,
+                price=float(price),
+                currency='EUR',
+                is_fba=True,
+                marketplace_id=mktpl_id,
+            )
+            result    = (resp.payload or {}).get('FeesEstimateResult', {})
+            estimate  = result.get('FeesEstimate', {})
+            total_raw = estimate.get('TotalFeesEstimate', {}).get('Amount')
+            if total_raw is not None:
+                break
+            # Server-/ClientError sind bei der Fees-API haeufig transient → kurz erneut.
+            status = result.get('Status', '?')
+            if status in ('ServerError', 'ClientError') and attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            err = f"TotalFeesEstimate.Amount fehlt (Status: {status})"
             _tl.last_error = err
             print(f"[amazon_sp.fees] WARNING: {err}", file=sys.stderr)
             return None
