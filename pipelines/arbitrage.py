@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipelines.arbitrage  v0.1.0
+pipelines.arbitrage  v0.5.0
 ============================
 Gemeinsamer Arbitrage-Flow: EAN/ASIN + Einkaufspreis → Amazon-Angebot (SP-API) +
 eBay-Markt → Profitabilitaet je Plattform (reseller_profitability).
@@ -32,6 +32,12 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.5.0  (2026-05-29)
+  - amazon_offer.fee_breakdown: granulare Gebuehren-Aufschluesselung (fba_fee,
+    variable_closing_fee, storage_fee_monthly, prep_fee, inbound_fee) wird
+    durchgereicht. Ermoeglicht Kalkulator-Webapp die exakte Befuellung
+    einzelner Eingabefelder statt gebundelter fba_fee_netto.
+
 v0.4.0  (2026-05-29)
   - Variations: ArbitrageResult.parent_asins/child_asins aus dem Katalog.
   - amazon_offer.offers_detail: aktueller Angebots-Snapshot fuer Buy-Box-Tracking.
@@ -82,7 +88,7 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
 # MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
@@ -264,6 +270,11 @@ def evaluate_arbitrage(
             if seller_id:
                 selling_allowed = check_restrictions(asin, seller_id, amazon_credentials, marketplace)
 
+            # Granulare Gebuehrer-Aufschluesselung (ohne details/error-Rohdaten).
+            _fee_bd = (
+                {k: v for k, v in breakdown.items() if k not in ('details', 'error')}
+                if breakdown is not None else None
+            )
             res.amazon_offer = {
                 'asin':              asin,
                 'buy_box_brutto':    buy_box,
@@ -281,6 +292,7 @@ def evaluate_arbitrage(
                 'buy_box_dominant':  offers.buy_box_dominant,
                 'price_source':      price_source,
                 'offers_detail':     offers.offers_detail,
+                'fee_breakdown':     _fee_bd,
             }
 
             if buy_box is not None:
