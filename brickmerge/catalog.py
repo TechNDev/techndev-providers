@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-techndev-providers  brickmerge/catalog.py  v1.0.0
+techndev-providers  brickmerge/catalog.py  v1.0.1
 ===================================================
 LEGO-Set-Katalog aus Brickmerge-CSV-Downloads (aktiv + EOL).
 Lokaler SQLite-Cache fuer schnelle Lookups ohne HTTP.
@@ -9,7 +9,7 @@ Vorher: setcatalog.SetCatalog in mydealz-watcher/setcatalog.py.
 Neu:    + EOL-Jahrgangslisten (letzte N Jahre)
         + SQLite-Cache statt reinem dict (EAN-Index, Status-Spalte)
 
-CSV-Quellen (Brickmerge.de, cp1252, Semikolon):
+CSV-Quellen (Brickmerge.de, UTF-8, Semikolon):
   Aktive Sets:  brickmerge_current_lego_sets.csv        (woechentlich)
   EOL <Jahr>:   brickmerge_<year>_eol_lego_sets.csv    (einmal/Jahr)
   Spalten:      Nummer;Thema;Name;UVP;Jahr;EAN;ASIN;URL
@@ -17,6 +17,12 @@ CSV-Quellen (Brickmerge.de, cp1252, Semikolon):
 
 CHANGELOG
 ---------
+v1.0.1  (2026-05-28)
+  - CSV_ENCODING korrigiert: cp1252 -> utf-8 (Brickmerge-CSVs sind UTF-8).
+    Behebt Zeichensatz-Fehler wie "LEGOÂ® Titanic" statt "LEGO® Titanic".
+    ACHTUNG: bestehende brickmerge_catalog.db-Dateien enthalten fehlerhafte
+    Namen. Bitte DB loeschen und neu befuellen (Consumer einfach neu starten).
+
 v1.0.0  (2026-05-25)
   - Initiales Release, extrahiert + erweitert aus setcatalog.py.
   - SQLite-Cache: brickmerge_catalog.db (Pfad vom Consumer uebergeben).
@@ -41,7 +47,7 @@ from urllib.request import Request, urlopen
 
 from ._models import SetInfo
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Konstanten
@@ -51,7 +57,7 @@ BASE_URL   = "https://www.brickmerge.de/files"
 CSV_ACTIVE = f"{BASE_URL}/brickmerge_current_lego_sets.csv"
 CSV_EOL    = f"{BASE_URL}/brickmerge_{{year}}_eol_lego_sets.csv"  # .format(year=)
 
-CSV_ENCODING  = "cp1252"
+CSV_ENCODING  = "utf-8"
 CSV_DELIMITER = ";"
 
 MAX_AGE_ACTIVE = 7    # Tage bis naechster Download der aktiven Liste
@@ -107,7 +113,7 @@ def _fetch_csv(url: str) -> bytes | None:
 
 def _parse_csv(raw_bytes: bytes, status: str, eol_year: int | None) -> list[SetInfo]:
     """
-    Parst eine Brickmerge-CSV (cp1252, Semikolon).
+    Parst eine Brickmerge-CSV (UTF-8, Semikolon).
     Zeilen mit Parsing-Fehlern werden still uebersprungen.
     Spalten: Nummer;Thema;Name;UVP;Jahr;EAN;ASIN;URL
     """

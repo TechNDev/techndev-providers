@@ -28,10 +28,83 @@ v1.0.0  (2026-05-25)
 """
 from __future__ import annotations
 
-from ._models import SoldItem
+from ._models import SoldItem, SoldResult, _price_stats, now_iso
+from ._rate   import _retry, scraper_limiter
 from .scraper import scrape_sold
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Oeffentliche API — analog amazon_sp
+# ══════════════════════════════════════════════════════════════════════════════
+
+@_retry
+def get_sold_listings(
+    query:             str,
+    credentials:       dict,
+    marketplace:       str        = 'EBAY_DE',
+    limit:             int        = 50,
+    new_only:          bool       = True,
+    fixed_price_only:  bool       = True,
+    min_price_filter:  float | None = None,
+) -> SoldResult:
+    """
+    Verkaufte eBay-Angebote fuer eine EAN/GTIN oder Freitext-Query.
+
+    Analog zu amazon_sp.search_by_ean():
+      Gibt immer ein SoldResult zurueck — kein raise, kein Tuple.
+      result.ok()             → True wenn kein Fehler
+      result.best_price       → Median-Preis (Fallback: Mean)
+      result.median_price     → Median aller verkauften Preise (nach Filter)
+      result.items            → gefilterte SoldItem-Liste
+      result.total            → Gesamtanzahl laut eBay (ungefiltert)
+      result.filtered_count   → Anzahl gefilterter Ausreisser
+      result.source           → 'scraper' | 'api'
+
+    Primary:  HTML-Scraper (scraper.scrape_sold).
+    Backlog:  Marketplace Insights API (_search_sold_api) — nach Business Approval.
+
+    query:            EAN/GTIN (z.B. '4010232075488') oder Freitext ('LEGO 75192').
+    credentials:      {'client_id': ..., 'client_secret': ..., 'env': 'production'}
+    marketplace:      eBay-Marketplace-ID (Default: 'EBAY_DE').
+    limit:            Max. Ergebnisse (1-200, Default: 50).
+    new_only:         Nur Zustand Neu (Default: True).
+    fixed_price_only: Nur Sofort-Kaufen (Default: True).
+    min_price_filter: Preisuntergrenze — Items unter diesem Wert werden aus
+                      items und Statistiken entfernt (filtered_count zaehlt sie).
+                      None = kein Filter (Default).
+                      Tipp: median * 0.5 fuer automatischen Ausreisser-Filter.
+    """
+    ts = now_iso()
+    scraper_limiter.wait()
+    total, items, error = scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
+
+    # Ausreisser-Filter
+    filtered_count = 0
+    if min_price_filter is not None:
+        before = len(items)
+        items  = [i for i in items if i.price is None or i.price >= min_price_filter]
+        filtered_count = before - len(items)
+
+    prices = [i.price for i in items if i.price is not None]
+    med, mn_mean, mn, mx = _price_stats(prices)
+
+    return SoldResult(
+        query          = query,
+        marketplace    = marketplace,
+        fetched_at     = ts,
+        total          = total,
+        count          = len(prices),
+        median_price   = med,
+        mean_price     = mn_mean,
+        min_price      = mn,
+        max_price      = mx,
+        items          = items,
+        filtered_count = filtered_count,
+        source         = 'scraper',
+        error          = error,
+    )
 
 
 def search_sold(

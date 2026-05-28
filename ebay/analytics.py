@@ -42,30 +42,31 @@ import requests
 
 from ._auth import get_user_token, api_base, SCOPE_ANALYTICS
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 TIMEOUT = 30
 
-# ── Verfuegbare Metriken ───────────────────────────────────────────────────────
+# ── Verfuegbare Metriken (validiert gegen production API 2026-05-28) ──────────
 ALL_METRICS: list[str] = [
-    "CLICK_THROUGH_RATE",               # Klickrate in Suchergebnissen
+    "CLICK_THROUGH_RATE",               # Klickrate in Suchergebnissen (%)
     "LISTING_IMPRESSION_TOTAL",         # Impressionen gesamt
     "LISTING_IMPRESSION_STORE",         # Impressionen aus eBay Store
     "LISTING_VIEWS_TOTAL",              # Gesamtaufrufe
     "LISTING_VIEWS_SOURCE_DIRECT",      # Direkte Aufrufe (Link/Lesezeichen)
     "LISTING_VIEWS_SOURCE_OFF_EBAY",    # Externe Quellen (Google etc.)
     "LISTING_VIEWS_SOURCE_OTHER_EBAY",  # Andere eBay-Seiten
-    "LISTING_VIEWS_SOURCE_SEARCH_AND_BROWSE",  # Suche & Browse
-    "SALES_CONVERSION_RATE",            # Konversionsrate (Verkauf / Aufrufe)
-    "TRANSACTION",                      # Anzahl Transaktionen (Verkäufe)
+    "SALES_CONVERSION_RATE",            # Konversionsrate Verkauf/Aufruf (%)
+    "TRANSACTION",                      # Anzahl Transaktionen (Verkaeufe)
+    # LISTING_VIEWS_SOURCE_SEARCH_AND_BROWSE — existiert nicht in production API
 ]
 
-# Sinnvolle Kern-Metriken fuer Standard-Aufruf
+# Kern-Metriken fuer Standard-Aufruf
 DEFAULT_METRICS: list[str] = [
     "LISTING_IMPRESSION_TOTAL",
     "LISTING_VIEWS_TOTAL",
-    "LISTING_VIEWS_SOURCE_SEARCH_AND_BROWSE",
+    "LISTING_VIEWS_SOURCE_DIRECT",
     "LISTING_VIEWS_SOURCE_OFF_EBAY",
+    "LISTING_VIEWS_SOURCE_OTHER_EBAY",
     "CLICK_THROUGH_RATE",
     "SALES_CONVERSION_RATE",
     "TRANSACTION",
@@ -151,30 +152,34 @@ class SellerStandards:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_traffic_report(
-    credentials: dict,
-    date_from:   str | None = None,
-    date_to:     str | None = None,
-    dimension:   str        = "DAY",
-    metrics:     list[str] | None = None,
-    listing_id:  str | None = None,
+    credentials:  dict,
+    date_from:    str | None = None,
+    date_to:      str | None = None,
+    dimension:    str        = "DAY",
+    metrics:      list[str] | None = None,
+    marketplace:  str        = "EBAY_DE",
+    listing_ids:  list[str] | None = None,
 ) -> TrafficReport:
     """
     Ruft den Traffic-Report der Sell Analytics API ab.
 
     credentials:  {'client_id': ..., 'client_secret': ..., 'refresh_token': ..., 'env': ...}
-    date_from:    Start ISO-Datum (Default: vor 30 Tagen), z.B. '2026-04-01'
-    date_to:      End ISO-Datum   (Default: heute),        z.B. '2026-05-28'
+    date_from:    Start-Datum yyyymmdd oder ISO (Default: vor 30 Tagen), z.B. '20260401'
+    date_to:      End-Datum   yyyymmdd oder ISO (Default: gestern),      z.B. '20260527'
     dimension:    'DAY' (pro Tag) oder 'LISTING' (pro Listing)
     metrics:      Liste aus ALL_METRICS (Default: DEFAULT_METRICS)
-    listing_id:   Optional — nur Daten fuer dieses Listing
+    marketplace:  eBay-Marketplace-ID (Default: 'EBAY_DE')
+    listing_ids:  Optional — auf bestimmte Listing-IDs einschraenken
 
+    Filter-Format intern: date_range:[yyyymmdd..yyyymmdd],marketplace_ids:{ID}
     Rueckgabe: TrafficReport (error != None bei Fehler)
     """
-    today    = date.today()
-    d_from   = date_from or (today - timedelta(days=30)).isoformat()
-    d_to     = date_to   or today.isoformat()
-    mets     = metrics or DEFAULT_METRICS
-    ts       = datetime.now().isoformat(timespec="seconds")
+    today   = date.today()
+    yesterday = today - timedelta(days=1)
+    d_from  = _to_yyyymmdd(date_from  or (today - timedelta(days=30)).isoformat())
+    d_to    = _to_yyyymmdd(date_to    or yesterday.isoformat())
+    mets    = metrics or DEFAULT_METRICS
+    ts      = datetime.now().isoformat(timespec="seconds")
 
     report = TrafficReport(
         date_from  = d_from,
@@ -183,7 +188,6 @@ def get_traffic_report(
         fetched_at = ts,
     )
 
-    # Token
     try:
         token = _get_token(credentials)
     except Exception as e:
@@ -191,30 +195,33 @@ def get_traffic_report(
         return report
 
     env = credentials.get("env", "production")
+
+    # Filter zusammenbauen: date_range + marketplace, optional listing_ids
+    filt_parts = [
+        f"date_range:[{d_from}..{d_to}]",
+        f"marketplace_ids:{{{marketplace}}}",
+    ]
+    if listing_ids:
+        ids_str = "|".join(listing_ids)
+        filt_parts.append(f"listing_ids:{{{ids_str}}}")
+
     params: dict = {
-        "dimension_key":      dimension,
-        "metric":             ",".join(mets),
-        "dateRange.start":    f"{d_from}T00:00:00.000Z",
-        "dateRange.end":      f"{d_to}T23:59:59.000Z",
+        "dimension_key": dimension,
+        "metric":        ",".join(mets),
+        "filter":        ",".join(filt_parts),
     }
-    if listing_id:
-        params["listing_id"] = listing_id
 
     url = f"{api_base(env)}/sell/analytics/v1/traffic_report"
     try:
         resp = requests.get(
             url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept":        "application/json",
-            },
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
             params=params,
             timeout=TIMEOUT,
         )
         resp.raise_for_status()
     except requests.HTTPError as e:
         code = e.response.status_code if e.response is not None else "?"
-        body = ""
         try:
             body = e.response.json()
         except Exception:
@@ -225,7 +232,7 @@ def get_traffic_report(
         report.error = f"Netzwerkfehler: {e}"
         return report
 
-    report.rows = _parse_traffic(resp.json(), mets)
+    report.rows = _parse_traffic(resp.json())
     _aggregate(report)
     return report
 
@@ -296,6 +303,11 @@ def get_seller_standards(
 # Interne Helfer
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _to_yyyymmdd(d: str) -> str:
+    """Konvertiert ISO-Datum ('2026-04-28') oder yyyymmdd ('20260428') → yyyymmdd."""
+    return d.replace("-", "")[:8]
+
+
 def _get_token(credentials: dict) -> str:
     """Waehlt automatisch User- oder Application-Token je nach Credentials."""
     client_id     = credentials["client_id"]
@@ -313,50 +325,56 @@ def _get_token(credentials: dict) -> str:
                           scope=SCOPE_ANALYTICS, env=env)
 
 
-def _parse_traffic(data: dict, metrics: list[str]) -> list[TrafficRow]:
-    """Parst die traffic_report-Antwort in TrafficRow-Objekte."""
+def _parse_traffic(data: dict) -> list[TrafficRow]:
+    """
+    Parst die traffic_report-Antwort in TrafficRow-Objekte.
 
-    def _metric(name: str, record: dict) -> float | int | None:
-        """Sucht den Wert einer Metrik im verschachtelten API-Record."""
-        for entry in record.get("metricData", []):
-            if entry.get("name") == name or entry.get("metricType") == name:
-                raw = entry.get("value") or entry.get("metricValue")
-                if raw is None:
-                    return None
-                try:
-                    f = float(raw)
-                    return int(f) if f == int(f) else round(f, 4)
-                except (TypeError, ValueError):
-                    return None
-        return None
+    API-Format:
+      header.metrics[i].key  →  gibt die Reihenfolge der Metriken vor
+      records[].dimensionValues[0].value  →  Datum (yyyymmdd) oder Listing-ID
+      records[].metricValues[i].value     →  Wert der Metrik i (gleicher Index)
+    """
+    # Metrik-Reihenfolge aus Header ableiten
+    header  = data.get("header") or {}
+    met_keys = [m["key"] for m in (header.get("metrics") or [])]
+
+    def _get(record: dict, key: str) -> float | int | None:
+        """Liefert den Wert fuer einen Metrik-Key per Index-Lookup."""
+        try:
+            idx = met_keys.index(key)
+        except ValueError:
+            return None
+        mv = record.get("metricValues") or []
+        if idx >= len(mv):
+            return None
+        raw = mv[idx].get("value")
+        if raw is None or not mv[idx].get("applicable", True):
+            return None
+        try:
+            f = float(raw)
+            return int(f) if f == int(f) else round(f, 6)
+        except (TypeError, ValueError):
+            return None
 
     rows: list[TrafficRow] = []
-
-    # API-Antwortformat: entweder flache Liste oder dimensionierte Struktur
-    records = (
-        data.get("trafficReportData")
-        or data.get("trafficReport")
-        or data.get("records")
-        or []
-    )
-
-    for rec in records:
-        dim_val   = str(rec.get("dimensionValue") or rec.get("date") or rec.get("listingId") or "")
-        dim_label = str(rec.get("dimensionLabel") or rec.get("title") or dim_val)
+    for rec in (data.get("records") or []):
+        dim_vals  = rec.get("dimensionValues") or [{}]
+        dim_val   = str(dim_vals[0].get("value") or "")
+        dim_label = str(dim_vals[0].get("localizedValue") or dim_val)
 
         rows.append(TrafficRow(
             dimension_value         = dim_val,
             dimension_label         = dim_label,
-            impressions_total       = _metric("LISTING_IMPRESSION_TOTAL", rec),
-            impressions_store       = _metric("LISTING_IMPRESSION_STORE", rec),
-            views_total             = _metric("LISTING_VIEWS_TOTAL", rec),
-            views_search_and_browse = _metric("LISTING_VIEWS_SOURCE_SEARCH_AND_BROWSE", rec),
-            views_off_ebay          = _metric("LISTING_VIEWS_SOURCE_OFF_EBAY", rec),
-            views_direct            = _metric("LISTING_VIEWS_SOURCE_DIRECT", rec),
-            views_other_ebay        = _metric("LISTING_VIEWS_SOURCE_OTHER_EBAY", rec),
-            click_through_rate      = _metric("CLICK_THROUGH_RATE", rec),
-            sales_conversion_rate   = _metric("SALES_CONVERSION_RATE", rec),
-            transactions            = _metric("TRANSACTION", rec),
+            impressions_total       = _get(rec, "LISTING_IMPRESSION_TOTAL"),
+            impressions_store       = _get(rec, "LISTING_IMPRESSION_STORE"),
+            views_total             = _get(rec, "LISTING_VIEWS_TOTAL"),
+            views_search_and_browse = None,   # kein gueltiger Metric-Key in production
+            views_off_ebay          = _get(rec, "LISTING_VIEWS_SOURCE_OFF_EBAY"),
+            views_direct            = _get(rec, "LISTING_VIEWS_SOURCE_DIRECT"),
+            views_other_ebay        = _get(rec, "LISTING_VIEWS_SOURCE_OTHER_EBAY"),
+            click_through_rate      = _get(rec, "CLICK_THROUGH_RATE"),
+            sales_conversion_rate   = _get(rec, "SALES_CONVERSION_RATE"),
+            transactions            = _get(rec, "TRANSACTION"),
         ))
 
     return rows
@@ -378,38 +396,67 @@ def _aggregate(report: TrafficReport) -> None:
 
 
 def _parse_standards(data: dict, ts: str, program: str, cycle: str) -> SellerStandards:
-    """Parst die seller_standards_profile-Antwort."""
-    profiles = data.get("standardsProfiles") or []
-    profile  = next(
-        (p for p in profiles if p.get("cycle", {}).get("cycleType") == cycle),
-        profiles[0] if profiles else {},
-    )
+    """
+    Parst die seller_standards_profile-Antwort.
 
-    status = (
-        profile.get("sellerLevel")
-        or profile.get("standardsStatus")
-        or data.get("sellerLevel")
-        or ""
+    API-Format:
+      standardsProfiles[].standardsLevel  →  'TOP_RATED' | 'ABOVE_STANDARD' | 'BELOW_STANDARD'
+      standardsProfiles[].program         →  'PROGRAM_DE' | 'PROGRAM_US' | 'PROGRAM_UK'
+      standardsProfiles[].cycle.cycleType →  'CURRENT' | 'PROJECTED'
+      standardsProfiles[].metrics[].metricKey, .value, .level, .type
+        value kann str/int/bool/dict sein (AMOUNT-Typ: {'value': '5064.19', 'currencyCodeEnum': 'EUR'})
+    """
+    profiles = data.get("standardsProfiles") or []
+
+    # Passendes Profil: program-Mapping (EBAY_DE → PROGRAM_DE) + cycle
+    prog_key = program.replace("EBAY_", "PROGRAM_")
+    profile  = next(
+        (p for p in profiles
+         if p.get("program") == prog_key
+         and p.get("cycle", {}).get("cycleType") == cycle),
+        None,
     )
-    eval_date = (
-        profile.get("evaluationDate")
-        or profile.get("cycle", {}).get("evaluationDate")
-        or ""
-    )
+    # Fallback: nur cycle matchen
+    if profile is None:
+        profile = next(
+            (p for p in profiles if p.get("cycle", {}).get("cycleType") == cycle),
+            profiles[0] if profiles else {},
+        )
+
+    status    = profile.get("standardsLevel") or ""
+    eval_date = profile.get("cycle", {}).get("evaluationDate") or ""
 
     metrics: list[StandardsMetric] = []
-    for m in (profile.get("metrics") or data.get("metrics") or []):
+    for m in (profile.get("metrics") or []):
+        # value kann primitiv oder dict sein (AMOUNT-Typ)
+        raw_val = m.get("value")
+        if isinstance(raw_val, dict):
+            # AMOUNT: {'value': '5064.19', 'currencyCodeEnum': 'EUR'}
+            metric_val = _safe_float(raw_val.get("value"))
+        elif isinstance(raw_val, bool):
+            metric_val = float(raw_val)
+        else:
+            metric_val = _safe_float(raw_val)
+
+        raw_thr = m.get("thresholdLowerBound") or m.get("thresholdUpperBound")
+        if isinstance(raw_thr, dict):
+            threshold_val = _safe_float(raw_thr.get("value"))
+        elif isinstance(raw_thr, bool):
+            threshold_val = float(raw_thr)
+        else:
+            threshold_val = _safe_float(raw_thr)
+
         metrics.append(StandardsMetric(
             name      = m.get("metricKey") or m.get("name") or "",
-            value     = _safe_float(m.get("value")),
-            threshold = _safe_float(m.get("goal") or m.get("threshold")),
-            unit      = m.get("unit") or "",
+            value     = metric_val,
+            threshold = threshold_val,
+            unit      = m.get("type") or "",
             basis     = _safe_int(m.get("basis") or m.get("transactionCount")),
         ))
 
     return SellerStandards(
         fetched_at      = ts,
-        program         = program,
+        program         = profile.get("program") or program,
         cycle           = cycle,
         status          = status,
         evaluation_date = eval_date,
