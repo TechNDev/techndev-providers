@@ -7,6 +7,11 @@ Extrahiert aus amz-einkauf data_collector._add_fees.
 
 CHANGELOG
 ---------
+v1.4.0  (2026-05-28)
+  - get_fees_breakdown(): MwSt-Berechnung ergänzt (mwst_pct, Default 19 %).
+    Rückgabe enthält price_net, vat_on_price, vat_on_fees, total_all_in
+    jetzt auf Basis Nettoproeis.
+
 v1.3.0  (2026-05-28)
   - get_fees_breakdown(): Pauschale Verkäuferkosten als Parameter ergänzt:
     storage_fee_monthly (0,15 €), prep_fee (0,50 €), inbound_fee (1,00 €).
@@ -38,7 +43,7 @@ from sp_api.api import ProductFees
 from ._rate import _retry, pricing_limiter
 from ._helpers import get_marketplace, get_marketplace_id
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # ── Thread-lokaler Fehlerspeicher ─────────────────────────────────────────────
 # get_last_fee_error() gibt den Fehler des letzten gescheiterten Aufrufs zurueck.
@@ -124,30 +129,43 @@ def get_fees_breakdown(
     storage_fee_monthly: float = 0.15,
     prep_fee: float = 0.50,
     inbound_fee: float = 1.00,
+    mwst_pct: float = 19.0,
 ) -> Optional[dict]:
     """
     Detaillierte Gebührenaufschlüsselung für eine ASIN.
 
-    Pauschale Verkäuferkosten (überschreibbar):
+    price wird als Brutto-Verkaufspreis (inkl. MwSt) erwartet.
+    Amazon liefert Gebühren netto (ohne MwSt) — MwSt wird separat berechnet.
+
+    Parameter (alle überschreibbar):
         storage_fee_monthly  Lagergebühr pro Einheit/Monat  (Default: 0,15 €)
         prep_fee             Prep-/Vorbereitungskosten       (Default: 0,50 €)
         inbound_fee          Transport du → Amazon-Lager     (Default: 1,00 €)
+        mwst_pct             MwSt-Satz in Prozent            (Default: 19,0 %)
 
     Rückgabe-Dict:
         {
-            # Amazon API-Gebühren
-            "total":                float,   # Amazon-Gesamtgebühr
-            "referral_fee":         float,   # Provision
-            "fba_fee":              float,   # FBA-Fulfillment (inkl. Versand → Kunde)
-            "variable_closing_fee": float,   # Variabler Abschluss
-            "per_item_fee":         float,   # Pro-Artikel-Gebühr
-            "other_fees":           float,   # Sonstige
+            # Preis-Aufschlüsselung
+            "price_gross":          float,   # Brutto-VK (Eingabe)
+            "vat_rate":             float,   # MwSt-Satz (z.B. 0.19)
+            "vat_on_price":         float,   # MwSt-Anteil im VK → ans Finanzamt
+            "price_net":            float,   # Netto-VK (Erlös vor Gebühren)
+            # Amazon API-Gebühren (netto, ohne MwSt)
+            "total":                float,   # Amazon-Gesamtgebühr (netto)
+            "referral_fee":         float,   # Provision (netto)
+            "fba_fee":              float,   # FBA-Fulfillment (netto)
+            "variable_closing_fee": float,   # Variabler Abschluss (netto)
+            "per_item_fee":         float,   # Pro-Artikel-Gebühr (netto)
+            "other_fees":           float,   # Sonstige (netto)
+            "vat_on_fees":          float,   # 19% MwSt auf Amazon-Gebühren
+                                             # (als Vorsteuer absetzbar)
             # Pauschale Verkäuferkosten
             "storage_fee_monthly":  float,   # Lager (je Monat)
             "prep_fee":             float,   # Prep
             "inbound_fee":          float,   # Inbound-Transport
             "seller_costs":         float,   # Summe Verkäuferkosten
-            "total_all_in":         float,   # Amazon + Verkäuferkosten
+            # Gesamt
+            "total_all_in":         float,   # Amazon (netto) + Verkäuferkosten
             "details": [...],
             "error": None | str,
         }
@@ -218,15 +236,24 @@ def get_fees_breakdown(
             buckets[bucket] += final if final else amount
 
         amazon_total = float(total_raw)
+        vat_rate     = mwst_pct / 100.0
+        vat_on_price = round(float(price) * vat_rate / (1 + vat_rate), 2)
+        price_net    = round(float(price) - vat_on_price,               2)
+        vat_on_fees  = round(amazon_total * vat_rate,                   2)
         seller_costs = round(storage_fee_monthly + prep_fee + inbound_fee, 2)
 
         return {
+            'price_gross':          round(float(price),                    2),
+            'vat_rate':             vat_rate,
+            'vat_on_price':         vat_on_price,
+            'price_net':            price_net,
             'total':                round(amazon_total,                    2),
             'referral_fee':         round(buckets['referral_fee'],         2),
             'fba_fee':              round(buckets['fba_fee'],              2),
             'variable_closing_fee': round(buckets['variable_closing_fee'], 2),
             'per_item_fee':         round(buckets['per_item_fee'],         2),
             'other_fees':           round(buckets['other_fees'],           2),
+            'vat_on_fees':          vat_on_fees,
             'storage_fee_monthly':  round(storage_fee_monthly,            2),
             'prep_fee':             round(prep_fee,                        2),
             'inbound_fee':          round(inbound_fee,                     2),
