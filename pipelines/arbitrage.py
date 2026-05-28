@@ -161,9 +161,18 @@ def evaluate_arbitrage(
             if offers.error:
                 res.errors.append(f"offers: {offers.error}")
 
-            buy_box = offers.buy_box_price
-            fba_fee_netto = 0.0
+            # VK = Buy-Box-Preis, Fallback niedrigster Neupreis (amz-einkauf-Standard).
+            buy_box       = offers.best_price
+            fba_fee_netto = None
             referral_pct  = get_referral_pct(category)
+
+            # Herkunft des Preises kennzeichnen (fuer die Anzeige).
+            if offers.buy_box_price is not None:
+                price_source = 'buy_box'
+            elif offers.lowest_new_price is not None:
+                price_source = 'lowest_new'
+            else:
+                price_source = offers.price_source or ''
 
             if buy_box is not None:
                 vk_netto = buy_box / (1 + mwst_rate)
@@ -209,13 +218,13 @@ def evaluate_arbitrage(
                 'category':          category,
                 'amazon_on_listing': offers.amazon_on_listing,
                 'buy_box_dominant':  offers.buy_box_dominant,
-                'price_source':      offers.price_source,
+                'price_source':      price_source,
             }
 
             if buy_box is not None:
                 amazon_fba_input = {
                     'vk_brutto':         buy_box,
-                    'fba_fee_netto':     fba_fee_netto,
+                    'fba_fee_netto':     fba_fee_netto if fba_fee_netto is not None else 0.0,
                     'referral_pct':      referral_pct,
                     'bsr':               bsr,
                     'category':          category,
