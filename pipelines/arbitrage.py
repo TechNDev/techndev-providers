@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipelines.arbitrage  v0.5.0
+pipelines.arbitrage  v0.6.0
 ============================
 Gemeinsamer Arbitrage-Flow: EAN/ASIN + Einkaufspreis → Amazon-Angebot (SP-API) +
 eBay-Markt → Profitabilitaet je Plattform (reseller_profitability).
@@ -32,6 +32,11 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.6.0  (2026-05-29)
+  - ArbitrageResult: brand, short_desc, long_desc, weight_kg, height_cm,
+    length_cm, width_cm — aus CatalogResult durchgereicht. Ermoeglicht
+    vollstaendigen JTL-CSV-Export ohne Icecat.
+
 v0.5.0  (2026-05-29)
   - amazon_offer.fee_breakdown: granulare Gebuehren-Aufschluesselung (fba_fee,
     variable_closing_fee, storage_fee_monthly, prep_fee, inbound_fee) wird
@@ -88,7 +93,7 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
 # MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
@@ -125,6 +130,13 @@ class ArbitrageResult:
     title:         str = ''
     category:      str = ''
     image:         str = ''
+    brand:         str = ''
+    short_desc:    str = ''
+    long_desc:     str = ''
+    weight_kg:     float = 0.0
+    height_cm:     float = 0.0
+    length_cm:     float = 0.0
+    width_cm:      float = 0.0
     parent_asins:  list[str] = field(default_factory=list)
     child_asins:   list[str] = field(default_factory=list)
     ek_netto:      float = 0.0
@@ -204,6 +216,13 @@ def evaluate_arbitrage(
         res.title        = cat.title
         res.category     = category = cat.category
         res.image        = cat.main_image
+        res.brand        = cat.brand
+        res.short_desc   = cat.short_desc
+        res.long_desc    = cat.long_desc
+        res.weight_kg    = cat.weight_kg
+        res.height_cm    = cat.height_cm
+        res.length_cm    = cat.length_cm
+        res.width_cm     = cat.width_cm
         res.parent_asins = cat.parent_asins
         res.child_asins  = cat.child_asins
         bsr          = cat.bsr
