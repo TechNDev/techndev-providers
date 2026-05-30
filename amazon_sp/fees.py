@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-amazon_sp  fees.py  v1.6.0
+amazon_sp  fees.py  v1.7.0
 ============================
 FBA-Gebuehrenschaetzung via Product Fees API.
 Extrahiert aus amz-einkauf data_collector._add_fees.
 
 CHANGELOG
 ---------
+v1.7.0  (2026-05-30)
+  - credentials-Parameter optional (Default None): Auto-Load via _credentials.py.
+
 v1.6.0  (2026-05-29)
   - get_fees_breakdown(): Retry (bis 3x, Backoff) bei transienten Fees-API-
     Fehlern (Status ServerError/ClientError ohne TotalFeesEstimate.Amount).
@@ -50,9 +53,10 @@ from typing import Optional
 from sp_api.api import ProductFees
 
 from ._rate import _retry, pricing_limiter
+from ._credentials import get_credentials
 from ._helpers import get_marketplace, get_marketplace_id
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 # ── Thread-lokaler Fehlerspeicher ─────────────────────────────────────────────
 # get_last_fee_error() gibt den Fehler des letzten gescheiterten Aufrufs zurueck.
@@ -77,7 +81,7 @@ def get_last_fee_error() -> Optional[str]:
 def estimate_fba_fees(
     asin: str,
     price: float,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
 ) -> Optional[float]:
     """
@@ -85,10 +89,12 @@ def estimate_fba_fees(
     Gibt None zurueck bei Fehler oder fehlender Gebuehrenantwort (kein raise).
     HTTP 429 wird propagiert fuer @_retry.
 
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     Bei Fehler: Fehlermeldung wird auf sys.stderr ausgegeben UND via
     get_last_fee_error() abrufbar gespeichert.
     Bei Erfolg: get_last_fee_error() gibt None zurueck.
     """
+    credentials    = get_credentials(credentials)
     _tl.last_error = None   # Reset: neuer Aufruf loescht vorigen Fehler
 
     mktpl    = get_marketplace(marketplace)
@@ -133,7 +139,7 @@ def estimate_fba_fees(
 def get_fees_breakdown(
     asin: str,
     price: float,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
     storage_fee_monthly: float = 0.15,
     prep_fee: float = 0.50,
@@ -186,7 +192,9 @@ def get_fees_breakdown(
         }
 
     Bei API-Fehler: None (Fehler via get_last_fee_error() abrufbar).
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     """
+    credentials    = get_credentials(credentials)
     _tl.last_error = None
 
     mktpl    = get_marketplace(marketplace)

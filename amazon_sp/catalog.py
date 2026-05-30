@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-amazon_sp  catalog.py  v1.1.0
+amazon_sp  catalog.py  v1.2.0
 ================================
 EAN / ASIN -> Produktdaten via Amazon CatalogItems API v2022-04-01.
 
@@ -15,6 +15,11 @@ Amazon indiziert Bundles/Multipacks je nach Produkt nur unter einem dieser Typen
 
 CHANGELOG
 ---------
+v1.2.0  (2026-05-30)
+  - credentials-Parameter optional (Default None): Auto-Load via _credentials.py.
+    Reihenfolge: explizit -> configure() -> AMZ_EINKAUF_CONFIG -> Auto-Discovery.
+    Rueckwaertskompatibel: bestehende Aufrufe mit credentials-Argument unveraendert.
+
 v1.1.0  (2026-05-29)
   - Variations: includedData 'relationships' + CatalogResult.parent_asins/
     child_asins + has_variations-Property (_parse_relationships).
@@ -38,6 +43,7 @@ from typing import Optional
 from sp_api.api import CatalogItemsV20220401
 
 from ._rate import _retry, catalog_limiter
+from ._credentials import get_credentials
 from ._helpers import (
     get_marketplace, get_marketplace_id,
     collect_amazon_images, _to_cm, _to_kg,
@@ -154,7 +160,7 @@ class CatalogResult:
 @_retry
 def search_by_ean(
     ean: str,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
 ) -> CatalogResult:
     """
@@ -162,7 +168,10 @@ def search_by_ean(
 
     Suchreihenfolge: EAN-13 -> GTIN-14 (EAN + fuehrende '0') -> UPC.
     HTTP 429 wird propagiert fuer @_retry. Andere Fehler -> error-Feld.
+
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     """
+    credentials = get_credentials(credentials)
     mktpl    = get_marketplace(marketplace)
     mktpl_id = mktpl.marketplace_id
 
@@ -204,13 +213,16 @@ def search_by_ean(
 @_retry
 def search_by_asin(
     asin: str,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
 ) -> CatalogResult:
     """
     ASIN -> CatalogResult via getCatalogItem (Direktsuche ohne EAN-Fallback).
     HTTP 429 wird propagiert fuer @_retry. Andere Fehler -> error-Feld.
+
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     """
+    credentials = get_credentials(credentials)
     if not asin:
         return CatalogResult(asin=asin, error='Leere ASIN')
 

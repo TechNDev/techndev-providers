@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-amazon_sp  pricing.py  v1.1.0
+amazon_sp  pricing.py  v1.2.0
 ================================
 Angebote, Buy-Box-Preis und Wettbewerbspreise via ProductsV0 API.
 
@@ -10,6 +10,9 @@ Merges beider bisheriger Implementierungen:
 
 CHANGELOG
 ---------
+v1.2.0  (2026-05-30)
+  - credentials-Parameter optional (Default None): Auto-Load via _credentials.py.
+
 v1.1.0  (2026-05-29)
   - OffersResult.offers_detail: aktueller Angebots-Snapshot je Seller
     (Landed-Preis, FBA/FBM, Buy-Box-Gewinner, Feedback) fuer Buy-Box-Tracking.
@@ -28,9 +31,10 @@ from typing import Optional
 from sp_api.api import ProductsV0
 
 from ._rate import _retry, pricing_limiter
+from ._credentials import get_credentials
 from ._helpers import get_marketplace, get_marketplace_id, get_amazon_seller_id
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -71,7 +75,7 @@ class OffersResult:
 @_retry
 def get_offers(
     asin: str,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
 ) -> OffersResult:
     """
@@ -80,7 +84,10 @@ def get_offers(
 
     Gibt OffersResult mit error-Feld zurueck statt Exception zu werfen.
     HTTP 429 wird propagiert fuer @_retry.
+
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     """
+    credentials   = get_credentials(credentials)
     mktpl         = get_marketplace(marketplace)
     mktpl_id      = get_marketplace_id(marketplace)
     amazon_seller = get_amazon_seller_id(marketplace)
@@ -173,13 +180,15 @@ def get_offers(
 
 def get_item_price(
     asin: str,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
 ) -> Optional[float]:
     """
     Buy-Box-Preis oder niedrigster Neupreis fuer eine ASIN.
     Vereinfachter Aufruf fuer EAN2JTL (amazon_price-Feld).
     Gibt None zurueck wenn kein Preis verfuegbar oder bei Fehler.
+
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     """
     result = get_offers(asin, credentials, marketplace)
     return result.best_price

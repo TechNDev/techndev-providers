@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-amazon_sp  restrictions.py  v1.0.0
+amazon_sp  restrictions.py  v1.1.0
 =====================================
 Verkaufserlaubnis via Listings Restrictions API.
 Extrahiert aus amz-einkauf data_collector._add_restrictions.
 
 CHANGELOG
 ---------
+v1.1.0  (2026-05-30)
+  - credentials-Parameter optional (Default None): Auto-Load via _credentials.py.
+
 v1.0.0  (2026-05-25)
   - Initiales Release
   - check_restrictions(): leere restrictions-Liste -> True (Verkauf erlaubt)
@@ -20,16 +23,17 @@ from typing import Optional
 from sp_api.api import ListingsRestrictions
 
 from ._rate import _retry, pricing_limiter
+from ._credentials import get_credentials
 from ._helpers import get_marketplace, get_marketplace_id
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 @_retry
 def check_restrictions(
     asin: str,
     seller_id: str,
-    credentials: dict,
+    credentials: Optional[dict] = None,
     marketplace: str = 'DE',
 ) -> Optional[bool]:
     """
@@ -40,11 +44,13 @@ def check_restrictions(
       False  = gesperrt (restrictions vorhanden)
       None   = API-Fehler oder seller_id leer
 
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     HTTP 429 wird propagiert fuer @_retry.
     """
     if not seller_id:
         return None
 
+    credentials = get_credentials(credentials)
     mktpl    = get_marketplace(marketplace)
     mktpl_id = get_marketplace_id(marketplace)
 

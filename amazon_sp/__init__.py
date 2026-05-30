@@ -1,5 +1,5 @@
 """
-amazon_sp  v1.4.0
+amazon_sp  v1.5.0
 ==================
 Amazon Selling Partner API Provider fuer TechNDev Tools.
 Gemeinsame Bibliothek fuer EAN2JTL und amz-einkauf.
@@ -13,6 +13,15 @@ Oeffentliche API
   from amazon_sp import get_last_fee_error               # Letzter Fees-Fehler
   from amazon_sp import check_restrictions               # Verkaufserlaubnis
   from amazon_sp import CatalogResult, OffersResult      # Datenmodelle
+  from amazon_sp import configure, get_credentials       # Credential-Management
+
+Credential-Management
+---------------------
+  Alle Funktionen akzeptieren credentials=None (Auto-Load):
+    1. Explizit uebergeben:  search_by_ean(ean, credentials={...})
+    2. Modul konfigurieren:  amazon_sp.configure({'refresh_token': ...})
+    3. Env-Var:              AMZ_EINKAUF_CONFIG=/pfad/amz_einkauf_config.json
+    4. Auto-Discovery:       sucht amz_einkauf_config.json in uebergeordneten Dirs
 
 Import-Pattern (Git-Submodul unter providers/)
 ----------------------------------------------
@@ -28,10 +37,14 @@ from .catalog      import CatalogResult, search_by_ean, search_by_asin
 from .pricing      import OffersResult, get_offers, get_item_price
 from .fees         import estimate_fba_fees, get_fees_breakdown, get_last_fee_error
 from .restrictions import check_restrictions
+from ._credentials import configure, get_credentials
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 __all__ = [
+    # Credential-Management
+    'configure',
+    'get_credentials',
     # Datenmodelle
     'CatalogResult',
     'OffersResult',
