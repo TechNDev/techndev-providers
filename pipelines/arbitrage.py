@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipelines.arbitrage  v0.6.0
+pipelines.arbitrage  v0.7.0
 ============================
 Gemeinsamer Arbitrage-Flow: EAN/ASIN + Einkaufspreis → Amazon-Angebot (SP-API) +
 eBay-Markt → Profitabilitaet je Plattform (reseller_profitability).
@@ -32,6 +32,12 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.7.0  (2026-05-30)
+  - amazon_credentials-Parameter optional (Default None): ruft amazon_sp.configure()
+    intern auf wenn uebergeben, sonst nutzt der Provider seinen eigenen Cache /
+    Auto-Discovery. Consumer muessen keine Credentials mehr explizit uebergeben.
+    Rueckwaertskompatibel: bestehende Aufrufe mit Credentials-Dict unveraendert.
+
 v0.6.0  (2026-05-29)
   - ArbitrageResult: brand, short_desc, long_desc, weight_kg, height_cm,
     length_cm, width_cm — aus CatalogResult durchgereicht. Ermoeglicht
@@ -85,6 +91,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from amazon_sp import (
+    configure,
     search_by_ean, search_by_asin,
     get_offers, get_fees_breakdown, estimate_fba_fees, get_last_fee_error,
     check_restrictions,
@@ -93,7 +100,7 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
 # MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
@@ -160,7 +167,7 @@ def evaluate_arbitrage(
     ek_netto:           float,
     ean:                Optional[str] = None,
     asin:               Optional[str] = None,
-    amazon_credentials: dict,
+    amazon_credentials: Optional[dict] = None,
     seller_id:          str = '',
     ebay_credentials:   Optional[dict] = None,
     profile:            str = 'standard',
@@ -175,17 +182,19 @@ def evaluate_arbitrage(
     """
     Bewertet den Wiederverkauf eines Produkts auf Amazon (FBA) und eBay.
 
-    Pflicht: ek_netto und mindestens einer von ean/asin sowie amazon_credentials.
+    Pflicht: ek_netto und mindestens einer von ean/asin.
 
     ek_netto:            Einkaufspreis netto (bereits normalisiert: Brutto/Netto +
                          ggf. Inbound-Versand erledigt der Aufrufer).
     ean / asin:          EAN bevorzugt (liefert Katalogdaten in einem Call). Ist nur
                          asin gesetzt, wird search_by_asin fuer Katalogdaten genutzt.
-    amazon_credentials:  SP-API-Creds {refresh_token, lwa_app_id, lwa_client_secret}.
+    amazon_credentials:  SP-API-Creds (optional). None → amazon_sp.configure()-Cache
+                         oder Auto-Discovery (AMZ_EINKAUF_CONFIG / Sibling-Pfad).
+                         Wenn uebergeben: wird intern via configure() gesetzt.
     seller_id:           Eigene Seller-ID fuer Verkaufserlaubnis (leer → uebersprungen).
     ebay_credentials:    {client_id, client_secret, env} — None → eBay uebersprungen.
     profile:             reseller_profitability-Profil ('standard'|'eol_lego'|'high_margin').
-    ebay_shipping_cost:  Versandkosten-Basis fuer die eBay-Gebuehrenrechnung (Default 6 €).
+    ebay_shipping_cost:  Versandkosten-Basis fuer die eBay-Gebuehrenrechnung (Default 6 EUR).
     eu_marketplaces:     Liste weiterer Amazon-EU-Maerkte fuer den Vergleich (z.B.
                          ['UK','FR','ES','IT']). None/[] → kein EU-Vergleich.
     fx_to_eur:           Wechselkurse {Waehrung: EUR-Wert je 1 Einheit}, z.B.
@@ -197,6 +206,11 @@ def evaluate_arbitrage(
     if not (ean or asin):
         raise ValueError("Mindestens 'ean' oder 'asin' muss gesetzt sein.")
 
+    # Credentials einmalig fuer diese Session konfigurieren (falls uebergeben).
+    # Ist amazon_credentials=None, nutzt amazon_sp seinen eigenen Cache / Auto-Discovery.
+    if amazon_credentials is not None:
+        configure(amazon_credentials)
+
     res = ArbitrageResult(ean=ean, asin=asin, ek_netto=round(ek_netto, 2))
 
     # ── 1. Katalog: ASIN + Stammdaten (BSR, Kategorie, Rating) auflösen ──────────
@@ -206,9 +220,9 @@ def evaluate_arbitrage(
     review_count = 0
     try:
         if ean:
-            cat = search_by_ean(ean, amazon_credentials, marketplace)
+            cat = search_by_ean(ean, marketplace=marketplace)
         else:
-            cat = search_by_asin(asin, amazon_credentials, marketplace)
+            cat = search_by_asin(asin, marketplace=marketplace)
         if cat.error:
             res.errors.append(f"catalog: {cat.error}")
         if cat.asin:
@@ -235,7 +249,7 @@ def evaluate_arbitrage(
     amazon_fba_input: Optional[dict] = None
     if asin:
         try:
-            offers = get_offers(asin, amazon_credentials, marketplace)
+            offers = get_offers(asin, marketplace=marketplace)
             if offers.error:
                 res.errors.append(f"offers: {offers.error}")
 
@@ -257,7 +271,8 @@ def evaluate_arbitrage(
                 vk_netto = buy_box / (1 + mwst_rate)
                 # Referral aus Breakdown herausrechnen (kein Doppelzählen).
                 breakdown = get_fees_breakdown(
-                    asin, buy_box, amazon_credentials, marketplace,
+                    asin, buy_box,
+                    marketplace=marketplace,
                     ek_price=res.ek_netto, mwst_pct=mwst_rate * 100,
                 )
                 if breakdown is not None:
@@ -277,7 +292,7 @@ def evaluate_arbitrage(
                     if fee_err:
                         res.errors.append(f"fees_breakdown: {fee_err}")
                     # Fallback: Gesamtgebühr schätzen, Referral per Kategorie abziehen.
-                    total_fee = estimate_fba_fees(asin, buy_box, amazon_credentials, marketplace)
+                    total_fee = estimate_fba_fees(asin, buy_box, marketplace=marketplace)
                     if total_fee is not None:
                         fba_fee_netto = round(max(0.0, total_fee - vk_netto * referral_pct), 2)
                     else:
@@ -287,7 +302,7 @@ def evaluate_arbitrage(
             # Verkaufserlaubnis (nur wenn seller_id konfiguriert).
             selling_allowed = None
             if seller_id:
-                selling_allowed = check_restrictions(asin, seller_id, amazon_credentials, marketplace)
+                selling_allowed = check_restrictions(asin, seller_id, marketplace=marketplace)
 
             # Granulare Gebuehrer-Aufschluesselung (ohne details/error-Rohdaten).
             _fee_bd = (
@@ -393,12 +408,11 @@ def evaluate_arbitrage(
     # ── 5. EU-Markt-Vergleich (optional) ─────────────────────────────────────────
     if asin and eu_marketplaces:
         res.eu_markets = _evaluate_eu_markets(
-            asin               = asin,
-            ek_netto           = res.ek_netto,
-            amazon_credentials = amazon_credentials,
-            marketplaces       = eu_marketplaces,
-            fx_to_eur          = fx_to_eur or {},
-            errors             = res.errors,
+            asin         = asin,
+            ek_netto     = res.ek_netto,
+            marketplaces = eu_marketplaces,
+            fx_to_eur    = fx_to_eur or {},
+            errors       = res.errors,
         )
 
     return res
@@ -410,12 +424,11 @@ def evaluate_arbitrage(
 
 def _evaluate_eu_markets(
     *,
-    asin:               str,
-    ek_netto:           float,
-    amazon_credentials: dict,
-    marketplaces:       list[str],
-    fx_to_eur:          dict[str, float],
-    errors:             list[str],
+    asin:         str,
+    ek_netto:     float,
+    marketplaces: list[str],
+    fx_to_eur:    dict[str, float],
+    errors:       list[str],
 ) -> list[dict]:
     """
     Bewertet dieselbe ASIN auf den uebergebenen Amazon-Maerkten (inkl. DE, wenn
@@ -454,13 +467,13 @@ def _evaluate_eu_markets(
         try:
             # Rank (best effort — Fehler hier ist nicht fatal).
             try:
-                cat = search_by_asin(asin, amazon_credentials, mp)
+                cat = search_by_asin(asin, marketplace=mp)
                 if cat.ok():
                     entry['bsr'] = cat.bsr
             except Exception as e:                           # noqa: BLE001
                 errors.append(f"eu:{mp}:catalog: {type(e).__name__}: {e}")
 
-            offers = get_offers(asin, amazon_credentials, mp)
+            offers = get_offers(asin, marketplace=mp)
             if offers.error:
                 errors.append(f"eu:{mp}:offers: {offers.error}")
             entry['amazon_on_listing'] = offers.amazon_on_listing
@@ -486,7 +499,7 @@ def _evaluate_eu_markets(
             entry['price_eur_brutto'] = round(price_local * fx, 2)
 
             breakdown = get_fees_breakdown(
-                asin, price_local, amazon_credentials, mp, mwst_pct=vat * 100,
+                asin, price_local, marketplace=mp, mwst_pct=vat * 100,
             )
             if breakdown is None:
                 fee_err = get_last_fee_error()
