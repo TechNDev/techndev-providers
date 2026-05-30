@@ -6,3 +6,6 @@ __pycache__/
 # Credentials / Secrets (TechNDev-Standard, siehe CLAUDE.md)
 *secrets.json
 *.pem
+
+# Credentials / Secrets (TechNDev-Standard, CLAUDE.md)
+*_config.json
