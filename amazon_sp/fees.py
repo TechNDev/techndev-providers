@@ -97,6 +97,10 @@ def estimate_fba_fees(
     credentials    = get_credentials(credentials)
     _tl.last_error = None   # Reset: neuer Aufruf loescht vorigen Fehler
 
+    if not price or float(price) <= 0:
+        _tl.last_error = "estimate_fba_fees: price ist 0 oder None — kein API-Call"
+        return None
+
     mktpl    = get_marketplace(marketplace)
     mktpl_id = get_marketplace_id(marketplace)
 
@@ -200,6 +204,12 @@ def get_fees_breakdown(
     mktpl    = get_marketplace(marketplace)
     mktpl_id = get_marketplace_id(marketplace)
 
+    if not price or float(price) <= 0:
+        err = "get_fees_breakdown: price ist 0 oder None — kein API-Call"
+        _tl.last_error = err
+        print(f"[amazon_sp.fees] WARNING: {err}", file=sys.stderr)
+        return None
+
     try:
         estimate  = {}
         total_raw = None
@@ -218,9 +228,11 @@ def get_fees_breakdown(
             total_raw = estimate.get('TotalFeesEstimate', {}).get('Amount')
             if total_raw is not None:
                 break
-            # Server-/ClientError sind bei der Fees-API haeufig transient → kurz erneut.
             status = result.get('Status', '?')
-            if status in ('ServerError', 'ClientError') and attempt < 2:
+            # ClientError = dauerhafter Fehler (ungueltige ASIN, kein Buy-Box, Kategorie)
+            # → kein Retry, sofort abbrechen.
+            # ServerError = transient → max. 2 Versuche mit kurzem Sleep.
+            if status == 'ServerError' and attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             err = f"TotalFeesEstimate.Amount fehlt (Status: {status})"
