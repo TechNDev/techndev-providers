@@ -1,0 +1,17 @@
+# Zeilenenden geraeteunabhaengig normalisieren — im Repo immer LF
+* text=auto eol=lf
+
+# Binaerdateien nie anfassen
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.xlsx binary
+*.xls  binary
+*.db   binary
+*.mp3  binary
+*.mp4  binary
+*.wav  binary
+*.zip  binary
