@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+
+# Credentials / Secrets (TechNDev-Standard, siehe CLAUDE.md)
+*secrets.json
+*.pem
