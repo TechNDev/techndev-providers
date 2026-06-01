@@ -304,9 +304,14 @@ def search_by_brand(
     seen_asins: set[str] = set()
     page_token: Optional[str] = None
 
+    # SP-API verlangt 'keywords' ODER 'identifiers' als Pflicht-Suchkriterium;
+    # brandNames ist nur ein zusaetzlicher Filter. Ohne explizite Keywords nutzen
+    # wir den Markennamen selbst als Suchbegriff und filtern zusaetzlich per brandNames.
+    effective_keywords = keywords.strip() if keywords and keywords.strip() else brand
+
     for _page in range(max(1, int(max_pages))):
         params = dict(
-            keywords=keywords if keywords else None,
+            keywords=effective_keywords,
             brandNames=[brand],
             includedData=_INCLUDED_ALL,
             marketplaceIds=[mktpl_id],
