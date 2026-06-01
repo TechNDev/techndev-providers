@@ -15,6 +15,11 @@ Amazon indiziert Bundles/Multipacks je nach Produkt nur unter einem dieser Typen
 
 CHANGELOG
 ---------
+v1.3.0  (2026-06-01)
+  - search_by_brand(): Marken-Suche via searchCatalogItems(brandNames=[..]),
+    paginiert ueber pageToken bis max_pages. Liefert list[CatalogResult]
+    (Stammdaten, keine Preise). EAN aus identifiers via _ean_from_identifiers().
+
 v1.2.0  (2026-05-30)
   - credentials-Parameter optional (Default None): Auto-Load via _credentials.py.
     Reihenfolge: explizit -> configure() -> AMZ_EINKAUF_CONFIG -> Auto-Discovery.
@@ -255,6 +260,100 @@ def search_by_asin(
         return CatalogResult(asin=asin, error='Leere API-Antwort')
 
     return _parse_item(item, ean='', mktpl_id=mktpl_id)
+
+
+@_retry
+def search_by_brand(
+    brand: str,
+    keywords: Optional[str] = None,
+    credentials: Optional[dict] = None,
+    marketplace: str = 'DE',
+    max_pages: int = 5,
+    page_size: int = 20,
+) -> list[CatalogResult]:
+    """
+    Marke -> Liste von CatalogResult via searchCatalogItems (brandNames).
+
+    Paginiert ueber pagination.nextToken bis max_pages erreicht oder kein
+    weiterer Token. Liefert Stammdaten (asin, ean, brand, title, Bilder, Masse) —
+    KEINE Preise/Fees. EAN wird aus identifiers extrahiert (kann '' sein).
+
+    HINWEIS: Amazon liefert NICHT garantiert *alle* Produkte einer Marke, sondern
+    nur was der Katalog-Suchindex je Marketplace zurueckgibt (paginiert). Mit
+    max_pages * page_size ist die Obergrenze gedeckelt (Default 5*20 = 100).
+
+    HTTP 429 wird propagiert fuer @_retry. brand ist Pflicht.
+
+    credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
+    """
+    brand = (brand or '').strip()
+    if not brand:
+        return [CatalogResult(error='Leere Marke')]
+
+    credentials = get_credentials(credentials)
+    mktpl    = get_marketplace(marketplace)
+    mktpl_id = mktpl.marketplace_id
+
+    try:
+        catalog = CatalogItemsV20220401(credentials=credentials, marketplace=mktpl)
+    except Exception as e:
+        return [CatalogResult(error=f'SP-API-Client-Fehler: {e}')]
+
+    page_size = max(1, min(int(page_size), 20))   # SP-API erlaubt max 20
+    results: list[CatalogResult] = []
+    seen_asins: set[str] = set()
+    page_token: Optional[str] = None
+
+    for _page in range(max(1, int(max_pages))):
+        params = dict(
+            keywords=keywords if keywords else None,
+            brandNames=[brand],
+            includedData=_INCLUDED_ALL,
+            marketplaceIds=[mktpl_id],
+            pageSize=page_size,
+        )
+        if page_token:
+            params['pageToken'] = page_token
+        params = {k: v for k, v in params.items() if v is not None}
+
+        try:
+            catalog_limiter.wait()
+            resp = catalog.search_catalog_items(**params)
+        except Exception as e:
+            if '429' in str(e) or 'throttl' in str(e).lower():
+                raise                           # @_retry uebernimmt
+            results.append(CatalogResult(error=f'Marken-Suche fehlgeschlagen: {e}'))
+            break
+
+        payload = resp.payload or {}
+        items   = payload.get('items', []) or []
+        for it in items:
+            asin = it.get('asin', '')
+            if asin and asin in seen_asins:
+                continue
+            seen_asins.add(asin)
+            ean = _ean_from_identifiers(it, mktpl_id)
+            results.append(_parse_item(it, ean=ean, mktpl_id=mktpl_id))
+
+        page_token = ((payload.get('pagination') or {}).get('nextToken'))
+        if not page_token:
+            break
+
+    return results
+
+
+def _ean_from_identifiers(item: dict, mktpl_id: str) -> str:
+    """Extrahiert eine EAN/GTIN/UPC aus den CatalogItem-identifiers (oder '')."""
+    ident_sets = item.get('identifiers') or []
+    for ident_set in ident_sets:
+        if ident_set.get('marketplaceId') and ident_set.get('marketplaceId') != mktpl_id:
+            continue
+        for ident in ident_set.get('identifiers', []) or []:
+            if ident.get('identifierType') in ('EAN', 'GTIN', 'UPC'):
+                val = str(ident.get('identifier', '')).strip()
+                if val:
+                    return val
+    return ''
 
 
 # ══════════════════════════════════════════════════════════════════════════════

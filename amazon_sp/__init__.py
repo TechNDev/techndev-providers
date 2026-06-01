@@ -1,12 +1,13 @@
 """
-amazon_sp  v1.5.0
+amazon_sp  v1.6.0
 ==================
 Amazon Selling Partner API Provider fuer TechNDev Tools.
 Gemeinsame Bibliothek fuer EAN2JTL und amz-einkauf.
 
 Oeffentliche API
 ----------------
-  from amazon_sp import search_by_ean, search_by_asin   # Katalog
+  from amazon_sp import search_by_ean, search_by_asin   # Katalog (EAN/ASIN)
+  from amazon_sp import search_by_brand                  # Katalog (Marken-Suche)
   from amazon_sp import get_offers, get_item_price       # Preise & Angebote
   from amazon_sp import estimate_fba_fees                # FBA-Gebuehren (Summe)
   from amazon_sp import get_fees_breakdown               # FBA-Gebuehren (Detail)
@@ -33,13 +34,13 @@ Import-Pattern (Git-Submodul unter providers/)
 
   from amazon_sp import search_by_ean, CatalogResult
 """
-from .catalog      import CatalogResult, search_by_ean, search_by_asin
+from .catalog      import CatalogResult, search_by_ean, search_by_asin, search_by_brand
 from .pricing      import OffersResult, get_offers, get_item_price
 from .fees         import estimate_fba_fees, get_fees_breakdown, get_last_fee_error
 from .restrictions import check_restrictions
 from ._credentials import configure, get_credentials
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 __all__ = [
     # Credential-Management
@@ -51,6 +52,7 @@ __all__ = [
     # Katalog
     'search_by_ean',
     'search_by_asin',
+    'search_by_brand',
     # Preise & Angebote
     'get_offers',
     'get_item_price',
