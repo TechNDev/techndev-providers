@@ -9,3 +9,10 @@ __pycache__/
 
 # Credentials / Secrets (TechNDev-Standard, CLAUDE.md)
 *_config.json
+
+# Lokale Caches / DBs
+*.db
+
+# Scrape-Outputs (regenerierbar)
+export/
+
