@@ -15,6 +15,11 @@ Amazon indiziert Bundles/Multipacks je nach Produkt nur unter einem dieser Typen
 
 CHANGELOG
 ---------
+v1.4.0  (2026-06-01)
+  - search_catalog(keywords=, brand=): generische Stichwort-/Marken-Suche.
+    keywords ODER brand Pflicht; brandNames nur als Filter wenn brand gesetzt.
+    search_by_brand() ist jetzt ein duenner Wrapper darum (rueckwaertskompatibel).
+
 v1.3.0  (2026-06-01)
   - search_by_brand(): Marken-Suche via searchCatalogItems(brandNames=[..]),
     paginiert ueber pageToken bis max_pages. Liefert list[CatalogResult]
@@ -263,32 +268,41 @@ def search_by_asin(
 
 
 @_retry
-def search_by_brand(
-    brand: str,
+def search_catalog(
     keywords: Optional[str] = None,
+    brand: Optional[str] = None,
     credentials: Optional[dict] = None,
     marketplace: str = 'DE',
     max_pages: int = 5,
     page_size: int = 20,
 ) -> list[CatalogResult]:
     """
-    Marke -> Liste von CatalogResult via searchCatalogItems (brandNames).
+    Stichwort- und/oder Marken-Suche via searchCatalogItems.
+
+    - keywords: Freitext-Suchbegriff (z.B. "Star Wars Helm").
+    - brand:    optionaler Marken-Filter (brandNames). Wenn keine keywords
+                angegeben sind, wird der Markenname selbst als Suchbegriff genutzt.
+    Mindestens eines von keywords/brand ist Pflicht (SP-API verlangt
+    'keywords' ODER 'identifiers'; brandNames allein reicht NICHT als Suchkriterium).
 
     Paginiert ueber pagination.nextToken bis max_pages erreicht oder kein
     weiterer Token. Liefert Stammdaten (asin, ean, brand, title, Bilder, Masse) —
     KEINE Preise/Fees. EAN wird aus identifiers extrahiert (kann '' sein).
 
-    HINWEIS: Amazon liefert NICHT garantiert *alle* Produkte einer Marke, sondern
-    nur was der Katalog-Suchindex je Marketplace zurueckgibt (paginiert). Mit
-    max_pages * page_size ist die Obergrenze gedeckelt (Default 5*20 = 100).
+    HINWEIS: Amazon liefert NICHT garantiert *alle* Treffer, sondern nur was der
+    Katalog-Suchindex je Marketplace zurueckgibt (paginiert). Obergrenze ist
+    max_pages * page_size gedeckelt (Default 5*20 = 100).
 
-    HTTP 429 wird propagiert fuer @_retry. brand ist Pflicht.
+    HTTP 429 wird propagiert fuer @_retry.
 
     credentials: SP-API-Creds dict oder None (dann Auto-Load via _credentials.py).
     """
-    brand = (brand or '').strip()
-    if not brand:
-        return [CatalogResult(error='Leere Marke')]
+    keywords = (keywords or '').strip()
+    brand    = (brand or '').strip()
+    # SP-API: keywords ODER identifiers Pflicht. Ohne keywords den Markennamen nutzen.
+    effective_keywords = keywords or brand
+    if not effective_keywords:
+        return [CatalogResult(error='Stichwort oder Marke erforderlich')]
 
     credentials = get_credentials(credentials)
     mktpl    = get_marketplace(marketplace)
@@ -304,15 +318,10 @@ def search_by_brand(
     seen_asins: set[str] = set()
     page_token: Optional[str] = None
 
-    # SP-API verlangt 'keywords' ODER 'identifiers' als Pflicht-Suchkriterium;
-    # brandNames ist nur ein zusaetzlicher Filter. Ohne explizite Keywords nutzen
-    # wir den Markennamen selbst als Suchbegriff und filtern zusaetzlich per brandNames.
-    effective_keywords = keywords.strip() if keywords and keywords.strip() else brand
-
     for _page in range(max(1, int(max_pages))):
         params = dict(
             keywords=effective_keywords,
-            brandNames=[brand],
+            brandNames=[brand] if brand else None,   # nur filtern wenn Marke gesetzt
             includedData=_INCLUDED_ALL,
             marketplaceIds=[mktpl_id],
             pageSize=page_size,
@@ -327,7 +336,7 @@ def search_by_brand(
         except Exception as e:
             if '429' in str(e) or 'throttl' in str(e).lower():
                 raise                           # @_retry uebernimmt
-            results.append(CatalogResult(error=f'Marken-Suche fehlgeschlagen: {e}'))
+            results.append(CatalogResult(error=f'Katalog-Suche fehlgeschlagen: {e}'))
             break
 
         payload = resp.payload or {}
@@ -345,6 +354,27 @@ def search_by_brand(
             break
 
     return results
+
+
+def search_by_brand(
+    brand: str,
+    keywords: Optional[str] = None,
+    credentials: Optional[dict] = None,
+    marketplace: str = 'DE',
+    max_pages: int = 5,
+    page_size: int = 20,
+) -> list[CatalogResult]:
+    """Marken-Suche — duenner Wrapper um search_catalog (brand ist Pflicht).
+
+    Rueckwaertskompatibel. Fuer reine Stichwort-Suche search_catalog(keywords=..) nutzen.
+    """
+    brand = (brand or '').strip()
+    if not brand:
+        return [CatalogResult(error='Leere Marke')]
+    return search_catalog(
+        keywords=keywords, brand=brand, credentials=credentials,
+        marketplace=marketplace, max_pages=max_pages, page_size=page_size,
+    )
 
 
 def _ean_from_identifiers(item: dict, mktpl_id: str) -> str:
