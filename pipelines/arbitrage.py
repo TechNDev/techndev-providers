@@ -32,6 +32,13 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.8.0  (2026-06-02)
+  - eBay-Ausgangsversand gewichts-/massbasiert via techndev-tools/shipping.py
+    (optionaler Sibling-Import). _ebay_shipping_for() ersetzt die ebay_shipping_cost-
+    Pauschale durch den guenstigsten passenden DHL-/Brief-Tarif anhand der SP-API-
+    Masse; ohne Masse parcel_only, ohne Gewicht/Lib Fallback auf die Pauschale.
+    Rueckwaertskompatibel: ebay_shipping_cost bleibt der Fallback-Default.
+
 v0.7.0  (2026-05-30)
   - amazon_credentials-Parameter optional (Default None): ruft amazon_sp.configure()
     intern auf wenn uebergeben, sonst nutzt der Provider seinen eigenen Cache /
@@ -100,7 +107,50 @@ from ebay import get_market_snapshot
 
 from reseller_profitability import qualify_all, get_referral_pct, PlatformResult
 
-__version__ = "0.7.0"
+# Optional: gewichts-/massbasierte Versandkosten (techndev-tools/shipping.py).
+# Sibling-Repo, kein hartes Dependency — fehlt es, faellt der Code auf die
+# uebergebene Pauschale (ebay_shipping_cost) zurueck.
+_calc_shipping = None
+try:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _here = _Path(__file__).resolve()
+    for _cand in (
+        _here.parents[1] / "tools",            # providers/tools (falls Submodul)
+        _here.parents[2] / "tools",            # product-catalog/tools
+        _here.parents[3] / "techndev-tools",   # Sibling auf Code-Ebene (Standard)
+        _here.parents[3] / "midas-bot" / "tools",
+    ):
+        if _cand.exists() and str(_cand) not in _sys.path:
+            _sys.path.insert(0, str(_cand))
+    from shipping import calc_shipping as _calc_shipping
+except Exception:                                                            # noqa: BLE001
+    _calc_shipping = None
+
+__version__ = "0.8.0"
+
+
+def _ebay_shipping_for(res, fallback: float) -> float:
+    """Gewichts-/massbasierte eBay-Versandkosten (brutto), sonst Pauschale.
+
+    Nutzt techndev-tools/shipping.calc_shipping mit den SP-API-Massen aus res.
+    parcel_only=True: bei eBay-Warenversand keine Brief-Produkte waehlen.
+    Fehlen Gewicht/Lib oder passt kein Tarif -> fallback (uebergebene Pauschale).
+    """
+    if _calc_shipping is None or not res.weight_kg:
+        return fallback
+    has_dims = bool(res.length_cm and res.width_cm and res.height_cm)
+    try:
+        q = _calc_shipping(
+            res.weight_kg * 1000.0,
+            res.length_cm or None, res.width_cm or None, res.height_cm or None,
+            # Ohne Masse keine (unrealistisch billigen) Brief-Produkte waehlen;
+            # mit Massen darf der guenstigste passende Tarif gewinnen.
+            parcel_only=not has_dims,
+        )
+        return q.price_eur if q else fallback
+    except Exception:                                                        # noqa: BLE001
+        return fallback
 
 # ── Marktplatz-Stammdaten fuer den EU-Vergleich ───────────────────────────────
 # MwSt-Regelsatz und Waehrung je Amazon-EU-Marktplatz (Stand 2026).
@@ -384,9 +434,11 @@ def evaluate_arbitrage(
                     )
 
                 if ebay_price is not None:
+                    # Versand gewichts-/massbasiert (SP-API-Masse), sonst Pauschale.
+                    ship = _ebay_shipping_for(res, ebay_shipping_cost)
                     ebay_input = {
                         'item_price':    ebay_price,
-                        'shipping_cost': ebay_shipping_cost,
+                        'shipping_cost': ship,
                         'sold_count':    sold.count,
                     }
             except Exception as e:                           # noqa: BLE001
