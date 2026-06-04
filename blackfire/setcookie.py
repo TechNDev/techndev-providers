@@ -36,12 +36,14 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "blackfire_config.json"
-# Stabile Kategorie fuer den Login-Check (zeigt eingeloggt B2B-Preise).
-VALIDATION_URL = "https://www.blackfire.eu/de-de/card-game-supplies/legion"
+# Stabile Kategorie fuer den Login-Check: eingeloggt listet sie Produkte
+# (Detail-Links + Preise); ausgeloggt ist sie leer.
+VALIDATION_URL = "https://www.blackfire.eu/de-de/trading-card-games/close-out/"
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 _PRICE_RE = re.compile(r"\d{1,4}[.,]\d{2}\s*(?:€|EUR)")
+_LINK_RE = re.compile(r"/de-de/[a-z0-9-]+-\d{4,7}")   # Produkt-Detail-Links
 
 
 def extract_cookie(raw: str) -> str:
@@ -82,14 +84,15 @@ def validate(cookie: str) -> tuple[bool, str]:
         html = _get(VALIDATION_URL, cookie)
     except Exception as e:                                   # noqa: BLE001
         return False, f"Konnte nicht pruefen (Netzwerk?): {e}"
-    # Einziges verlaessliches Signal: Preise (ausgeloggt = 0). Konto-/Login-Links
-    # erscheinen bei Blackfire in BEIDEN Zustaenden und taugen nicht zur Pruefung.
+    # Eingeloggt listet die Kategorie Produkte (Detail-Links, oft auch Preise);
+    # ausgeloggt ist sie leer. Konto-/Login-Links taugen NICHT (in beiden Zustaenden).
+    links = len(set(_LINK_RE.findall(html)))
     prices = len(_PRICE_RE.findall(html))
-    if prices:
-        return True, f"Session gueltig — {prices} Preisangaben sichtbar (eingeloggt)."
-    return False, ("Keine Preise im HTML gefunden — entweder NICHT eingeloggt ODER der "
-                   "Katalog wird per JavaScript nachgeladen. Cookie ist gespeichert; "
-                   "bitte mit einem echten Refresh/Detailseite gegenpruefen.")
+    if links >= 3:
+        extra = f", {prices} Preise" if prices else " (Preise erst auf Detailseiten)"
+        return True, f"Session gueltig — {links} Produkte gelistet{extra}."
+    return False, ("Keine Produkte gelistet — vermutlich NICHT eingeloggt. Cookie ist "
+                   "gespeichert; bitte erneut eingeloggt 'Copy as cURL' kopieren.")
 
 
 def main(argv=None) -> int:
