@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "techndev-providers"
+version = "1.0.0"
+description = "Gemeinsame Provider-Bibliothek (amazon_sp, ebay, icecat, brickmerge, cubegolem, gsheets) + arbitrage-Pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "python-amazon-sp-api>=0.19",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+# Flache Repo-Struktur: jedes Top-Level-Paket explizit (keine Sub-Pakete).
+# 'pipelines' braucht zur Laufzeit das Schwester-Paket reseller_profitability
+# (kein PyPI-Dep; im Consumer via Submodul/pip -e bereitgestellt).
+packages = ["amazon_sp", "brickmerge", "cubegolem", "ebay", "gsheets", "icecat", "pipelines"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
