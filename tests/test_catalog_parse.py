@@ -2,9 +2,31 @@
 """Parser-Tests fuer amazon_sp.catalog._parse_item — Kategorie-Extraktion.
 Regression fuer den Bug "Kategorie immer leer" (classifications marktplatz-gruppiert
 mit geschachtelter innerer Liste)."""
-from amazon_sp.catalog import _parse_item
+from amazon_sp.catalog import _parse_item, _match_ean_in_chunk
 
 DE = "A1PA6795UKMFR9"
+
+
+def _ident_item(ean, idtype="EAN", mkt=DE):
+    return {"identifiers": [{"marketplaceId": mkt,
+                             "identifiers": [{"identifierType": idtype, "identifier": ean}]}]}
+
+
+def test_match_ean_direct():
+    assert _match_ean_in_chunk(_ident_item("5702016914320"), DE, {"5702016914320"}) == "5702016914320"
+
+
+def test_match_ean_gtin14_leading_zero():
+    # Item meldet GTIN-14 (fuehrende 0) -> auf 13-stellige EAN aus dem Chunk mappen
+    assert _match_ean_in_chunk(_ident_item("05702016914320", "GTIN"), DE, {"5702016914320"}) == "5702016914320"
+
+
+def test_match_ean_ignores_other_marketplace():
+    assert _match_ean_in_chunk(_ident_item("5702016914320", mkt="OTHER"), DE, {"5702016914320"}) is None
+
+
+def test_match_ean_no_match():
+    assert _match_ean_in_chunk(_ident_item("9999999999999"), DE, {"5702016914320"}) is None
 
 
 def _item(classifications=None, sales_ranks=None):

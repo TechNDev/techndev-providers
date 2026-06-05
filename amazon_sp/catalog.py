@@ -220,6 +220,88 @@ def search_by_ean(
     return _parse_item(items[0], ean=ean, mktpl_id=mktpl_id)
 
 
+def _match_ean_in_chunk(item: dict, mktpl_id: str, chunk_set: set) -> Optional[str]:
+    """Findet heraus, welche angefragte EAN aus dem Batch dieses Item bedient.
+    Prueft alle EAN/GTIN/UPC-Identifier des Items gegen die Chunk-Menge; behandelt
+    auch die GTIN-14-Form (fuehrende '0') -> Rueckgabe der 13-stelligen EAN."""
+    for ident_set in item.get('identifiers') or []:
+        mid = ident_set.get('marketplaceId')
+        if mid and mid != mktpl_id:
+            continue
+        for ident in ident_set.get('identifiers', []) or []:
+            if ident.get('identifierType') in ('EAN', 'GTIN', 'UPC'):
+                v = str(ident.get('identifier', '')).strip()
+                if v in chunk_set:
+                    return v
+                if v.startswith('0') and v[1:] in chunk_set:
+                    return v[1:]
+    return None
+
+
+def search_by_eans(
+    eans: list,
+    credentials: Optional[dict] = None,
+    marketplace: str = 'DE',
+    batch_size: int = 20,
+) -> dict:
+    """
+    Batch-Variante von search_by_ean: bis zu 20 EANs (SP-API-Limit) pro
+    searchCatalogItems-Call. Gibt {ean: CatalogResult} fuer GEFUNDENE EANs zurueck
+    (nicht gefundene fehlen im Dict). identifiersType=EAN (kein GTIN/UPC-Fallback wie
+    im Einzelpfad) — fuer Massen-Refresh ausreichend. Pro Chunk ein kurzer Retry bei 429.
+
+    ~20x weniger Catalog-Calls als search_by_ean je Produkt einzeln.
+    """
+    credentials = get_credentials(credentials)
+    mktpl    = get_marketplace(marketplace)
+    mktpl_id = mktpl.marketplace_id
+    catalog  = CatalogItemsV20220401(credentials=credentials, marketplace=mktpl)
+
+    bs    = max(1, min(int(batch_size), 20))
+    clean = [str(e).strip() for e in eans if str(e).strip()]
+    out: dict = {}
+
+    def _query(id_string: str, id_type: str) -> list:
+        for attempt in range(3):
+            try:
+                catalog_limiter.wait()
+                resp = catalog.search_catalog_items(
+                    # WICHTIG: identifiers als KOMMA-STRING, nicht als Liste — die
+                    # SP-API/Library honoriert sonst nur den ersten Identifier
+                    # (numberOfResults=1). Mit Komma-String kommen alle Treffer.
+                    identifiers=id_string,
+                    identifiersType=id_type,
+                    includedData=_INCLUDED_ALL,
+                    marketplaceIds=[mktpl_id],
+                )
+                return (resp.payload or {}).get('items', [])
+            except Exception as exc:                       # noqa: BLE001
+                if ('429' in str(exc) or 'throttl' in str(exc).lower()) and attempt < 2:
+                    time.sleep(2 ** attempt * 2)
+                    continue
+                return []
+        return []
+
+    for start in range(0, len(clean), bs):
+        remaining = set(clean[start:start + bs])
+        # EAN -> GTIN-14 (fuehrende '0') -> UPC, jeweils nur fuer noch offene EANs
+        # (gleiche Fallback-Kette wie der Einzelpfad, aber gebuendelt).
+        for id_type in ('EAN', 'GTIN', 'UPC'):
+            if not remaining:
+                break
+            chunk_set = set(remaining)
+            if id_type == 'GTIN':
+                qvals = [('0' + e if len(e) == 13 else e) for e in remaining]
+            else:
+                qvals = list(remaining)
+            for item in _query(','.join(qvals), id_type):
+                matched = _match_ean_in_chunk(item, mktpl_id, chunk_set)
+                if matched and matched in remaining:
+                    out[matched] = _parse_item(item, ean=matched, mktpl_id=mktpl_id)
+                    remaining.discard(matched)
+    return out
+
+
 @_retry
 def search_by_asin(
     asin: str,
