@@ -418,11 +418,21 @@ def _parse_item(item: dict, ean: str, mktpl_id: str) -> CatalogResult:
            _attr_val('part_number'))
 
     # ── Kategorie aus Klassifikations-Hierarchie ──────────────────────────────
+    # SP-API liefert `classifications` MARKTPLATZ-GRUPPIERT mit geschachtelter
+    # innerer classifications-Liste (gleiche Struktur wie salesRanks). Frueher wurde
+    # faelschlich clsfs[-1].displayName gelesen (das ist die Marktplatz-Gruppe ohne
+    # displayName) -> Kategorie war IMMER leer. Jetzt: passenden Marktplatz waehlen,
+    # in die innere Liste absteigen (erster Eintrag = spezifischste Klassifikation),
+    # flache Alt-Struktur defensiv weiterhin unterstuetzen.
     category = ''
-    if clsfs:
-        last = clsfs[-1]
-        if isinstance(last, dict):
-            category = last.get('displayName') or last.get('classificationId', '')
+    _cls_grp = next((c for c in clsfs
+                     if isinstance(c, dict) and c.get('marketplaceId') == mktpl_id), None)
+    if _cls_grp is None and clsfs and isinstance(clsfs[0], dict):
+        _cls_grp = clsfs[0]
+    if isinstance(_cls_grp, dict):
+        _nested = _cls_grp.get('classifications') or []
+        _leaf = _nested[0] if (_nested and isinstance(_nested[0], dict)) else _cls_grp
+        category = _leaf.get('displayName') or _leaf.get('classificationId', '') or ''
 
     # ── Bullet-Points, Short-Desc, Long-Desc ─────────────────────────────────
     bullet_list   = [b.get('value', '') for b in attrs.get('bullet_point', [])   if b.get('value')]
@@ -474,6 +484,14 @@ def _parse_item(item: dict, ean: str, mktpl_id: str) -> CatalogResult:
     bsr, bsr_cat, bsr_disp, bsr_disp_cat, disp_ranks, class_ranks = (
         _parse_sales_ranks(sales_rks, mktpl_id)
     )
+
+    # ── Kategorie-Fallback ueber den BSR-Titel ────────────────────────────────
+    # Lieferte die Klassifikation keine Kategorie, den PDP-Hauptkategorie-Titel aus
+    # dem displayGroupRank nutzen (sehr zuverlaessig, gleiche Quelle wie der BSR),
+    # sonst den classificationRank-Titel. Damit ist die Kategorie-getriebene Logik
+    # (Retourenquote/BSR-Tabelle/Referral-Fallback) auch ohne classifications nutzbar.
+    if not category:
+        category = bsr_disp_cat or bsr_cat or ''
 
     # ── Bewertung ────────────────────────────────────────────────────────────
     rating, review_count = _parse_rating(attrs)
