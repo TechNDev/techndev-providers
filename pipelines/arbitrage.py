@@ -229,6 +229,7 @@ def evaluate_arbitrage(
     eu_marketplaces:    Optional[list[str]] = None,
     fx_to_eur:          Optional[dict[str, float]] = None,
     prefetched_catalog: Optional[dict] = None,
+    prefetched_fees:    Optional[dict] = None,
 ) -> ArbitrageResult:
     """
     Bewertet den Wiederverkauf eines Produkts auf Amazon (FBA) und eBay.
@@ -325,12 +326,26 @@ def evaluate_arbitrage(
 
             if buy_box is not None:
                 vk_netto = buy_box / (1 + mwst_rate)
-                # Referral aus Breakdown herausrechnen (kein Doppelzählen).
-                breakdown = get_fees_breakdown(
-                    asin, buy_box,
-                    marketplace=marketplace,
-                    ek_price=res.ek_netto, mwst_pct=mwst_rate * 100,
-                )
+                # Vorab gebuendelte Gebuehren (estimate_fees_batch) NUR bei exakt
+                # gleichem Preis verwenden -> identische Marge wie der Einzelabruf,
+                # sonst Live-Fallback (Referral skaliert mit dem Preis). Nebenkosten
+                # (Storage/Prep/Inbound) = get_fees_breakdown-Defaults 0,15+0,50+1,00.
+                _pf = (prefetched_fees or {}).get(asin)
+                if (_pf and _pf.get('total') is not None and _pf.get('price') is not None
+                        and abs(float(_pf['price']) - buy_box) < 0.01):
+                    _amz_total = round(float(_pf['total']), 2)
+                    breakdown = {
+                        'referral_fee': round(float(_pf.get('referral_fee', 0.0)), 2),
+                        'total':        _amz_total,
+                        'total_all_in': round(_amz_total + 1.65, 2),
+                    }
+                else:
+                    # Referral aus Breakdown herausrechnen (kein Doppelzählen).
+                    breakdown = get_fees_breakdown(
+                        asin, buy_box,
+                        marketplace=marketplace,
+                        ek_price=res.ek_netto, mwst_pct=mwst_rate * 100,
+                    )
                 if breakdown is not None:
                     referral_fee  = breakdown.get('referral_fee', 0.0)
                     # total_all_in = Amazon-Gebuehren (netto) + Verkaeufer-Nebenkosten
