@@ -228,6 +228,7 @@ def evaluate_arbitrage(
     ebay_shipping_cost: float = 6.0,
     eu_marketplaces:    Optional[list[str]] = None,
     fx_to_eur:          Optional[dict[str, float]] = None,
+    prefetched_catalog: Optional[dict] = None,
 ) -> ArbitrageResult:
     """
     Bewertet den Wiederverkauf eines Produkts auf Amazon (FBA) und eBay.
@@ -269,10 +270,15 @@ def evaluate_arbitrage(
     rating       = None
     review_count = 0
     try:
-        if ean:
-            cat = search_by_ean(ean, marketplace=marketplace)
-        else:
-            cat = search_by_asin(asin, marketplace=marketplace)
+        # Vorab gebuendelter Katalog (search_by_eans) wird bevorzugt -> spart pro
+        # EAN einen Catalog-Call in Massen-Laeufen. Fallback auf Einzelabruf, wenn
+        # die EAN nicht vorab aufgeloest wurde (oder kein Prefetch uebergeben ist).
+        cat = (prefetched_catalog or {}).get(ean) if (ean and prefetched_catalog) else None
+        if cat is None:
+            if ean:
+                cat = search_by_ean(ean, marketplace=marketplace)
+            else:
+                cat = search_by_asin(asin, marketplace=marketplace)
         if cat.error:
             res.errors.append(f"catalog: {cat.error}")
         if cat.asin:
