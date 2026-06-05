@@ -321,3 +321,87 @@ def get_fees_breakdown(
         _tl.last_error = err_msg
         print(f"[amazon_sp.fees] ERROR: {err_msg}", file=sys.stderr)
         return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Batch-Gebuehren — getMyFeesEstimates (bis 20 ASINs/Call)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_FEE_BUCKET_MAP = {
+    'referralfee':          'referral_fee',  'referral fee':         'referral_fee',
+    'fbafees':              'fba_fee',        'fba fees':             'fba_fee',
+    'fba fee':              'fba_fee',
+    'variableclosingfee':   'variable_closing_fee',
+    'variable closing fee': 'variable_closing_fee',
+    'peritemfee':           'per_item_fee',   'per item fee':        'per_item_fee',
+}
+
+
+def estimate_fees_batch(
+    items,                                  # list[tuple[asin, price]]
+    credentials: Optional[dict] = None,
+    marketplace: str = 'DE',
+    currency: str = 'EUR',
+    is_fba: bool = True,
+    batch_size: int = 20,
+) -> dict:
+    """
+    Batch-FBA-Gebuehrenschaetzung via getMyFeesEstimates (bis 20 ASINs/Call,
+    Rate-Limit 0.5/s) — ~20x weniger Calls als get_fees_breakdown je ASIN.
+
+    items: Liste von (asin, price)-Tupeln. price = Brutto-VK fuer die Schaetzung.
+    Rueckgabe: {asin: {status, total, referral_fee, fba_fee, variable_closing_fee,
+                       per_item_fee, other_fees}} — alle Betraege NETTO (Amazon
+    liefert Gebuehren ohne MwSt). Bei ClientError/fehlendem Betrag: {status, total: None}.
+    ASINs ohne Antwort fehlen im Dict.
+    """
+    credentials = get_credentials(credentials)
+    mktpl    = get_marketplace(marketplace)
+    mktpl_id = get_marketplace_id(marketplace)
+
+    def _amt(node) -> float:
+        return float((node or {}).get('Amount') or 0)
+
+    bs    = max(1, min(int(batch_size), 20))
+    clean = [(str(a).strip(), float(p)) for a, p in items
+             if str(a).strip() and p and float(p) > 0]
+    out: dict = {}
+
+    for start in range(0, len(clean), bs):
+        chunk = clean[start:start + bs]
+        reqs  = [dict(id_type='ASIN', id_value=a, price=p, currency=currency,
+                      is_fba=is_fba, marketplace_id=mktpl_id, identifier=a)
+                 for a, p in chunk]
+        results = []
+        for attempt in range(3):
+            try:
+                pricing_limiter.wait()
+                api  = ProductFees(credentials=credentials, marketplace=mktpl)
+                resp = api.get_my_fees_estimates(reqs)
+                results = resp.payload or []
+                break
+            except Exception as exc:                       # noqa: BLE001
+                if ('429' in str(exc) or 'throttl' in str(exc).lower()) and attempt < 2:
+                    time.sleep(2 ** attempt * 2)
+                    continue
+                break
+        for entry in results:
+            ident = entry.get('FeesEstimateIdentifier') or {}
+            asin  = ident.get('IdValue') or ident.get('SellerInputIdentifier') or ''
+            if not asin:
+                continue
+            status = entry.get('Status', '?')
+            est    = entry.get('FeesEstimate') or {}
+            total  = (est.get('TotalFeesEstimate') or {}).get('Amount')
+            if total is None:
+                out[asin] = {'status': status, 'total': None}
+                continue
+            buckets = {'referral_fee': 0.0, 'fba_fee': 0.0, 'variable_closing_fee': 0.0,
+                       'per_item_fee': 0.0, 'other_fees': 0.0}
+            for d in est.get('FeeDetailList') or []:
+                name   = d.get('FeeType', 'Unknown')
+                final  = _amt(d.get('FinalFee')) or _amt(d.get('FeeAmount'))
+                buckets[_FEE_BUCKET_MAP.get(name.lower().replace('_', ' '), 'other_fees')] += final
+            out[asin] = {'status': status, 'total': round(float(total), 2),
+                         **{k: round(v, 2) for k, v in buckets.items()}}
+    return out
