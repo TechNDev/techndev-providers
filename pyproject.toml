@@ -19,7 +19,7 @@ test = ["pytest>=7"]
 # Flache Repo-Struktur: jedes Top-Level-Paket explizit (keine Sub-Pakete).
 # 'pipelines' braucht zur Laufzeit das Schwester-Paket reseller_profitability
 # (kein PyPI-Dep; im Consumer via Submodul/pip -e bereitgestellt).
-packages = ["amazon_sp", "brickmerge", "cubegolem", "ebay", "gsheets", "icecat", "pipelines"]
+packages = ["amazon_sp", "brickmerge", "cashback", "cubegolem", "ebay", "gsheets", "icecat", "pipelines"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
