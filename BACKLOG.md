@@ -213,3 +213,35 @@ cashback/
 (`annotate_cashback`) → product-catalog (Verdrahtung + DB) → MarginPilot (Anzeige).
 
 ---
+
+---
+
+## 🔵 cashback — Erweiterungen aus realem Shoop-Angebot (Saturn/MediaMarkt)
+
+Reales Angebot (Shoop, Saturn+MediaMarkt, gültig bis 08.06.2026) deckte Lücken im
+v1.0-Resolver-Layer auf:
+- **2 % Cashback** auf valide Onlinebestellungen  → portal-% (passt)
+- **5 € Gutschein ab 199 €**, **10 € Gutschein ab 399 €** (shopweit, Fixbetrag, Staffel)
+- **„19 % MwSt geschenkt" (MediaMarkt)** auf viele Artikel (Händler-Preisrabatt)
+
+### Lücken im aktuellen Modell
+1. **portal-Resolver** kann nur flachen %-Satz je Shop — KEIN `valid_to`, `min_order`,
+   `cap`. Aktions-Ablauf (08.06.) und Mindestbestellwerte nicht abbildbar.
+2. **Order-Level-Fixbetrag mit Staffel** (5/10 € ab 199/399 €, shopweit, nicht
+   EAN-gebunden) hat KEINEN Resolver (`portal` = %-only, `manufacturer` = EAN-gebunden).
+
+### Vorgeschlagene Erweiterung
+- Neuer **`voucher`/Order-Bonus-Resolver**: shopweite Fixbeträge mit `min_order`-Staffel
+  + `valid_to`; eigene Stapel-Kategorie (stapelt mit portal-%).
+- **portal-Resolver** um `valid_to` / `min_order` / `cap` heben (statt nur `{shop: rate}`
+  ein Objekt je Shop).
+- Danach Saturn/MediaMarkt-Angebot 1:1 als Config + end-to-end durchrechenbar.
+
+### Wichtige Vorbehalte (für Doku/Confidence)
+- **Shoop ist B2C** — „valide Onlinebestellungen" schließen gewerbliche Wiederverkäufe
+  oft aus → Cashback evtl. ungültig (größtes Risiko; confidence eher 0.5–0.6).
+- **„MwSt geschenkt" ist KEIN Cashback**, sondern ein **Upfront-EK-Rabatt** (≈15,97 %
+  Netto-EK-Senkung für WV) → gehört in den EK, nicht in den Cashback-Layer.
+- **Stapeln MwSt-Aktion × Cashback unklar** (Händler stornieren Cashback auf stark
+  rabattierte Aktionsware oft) — nicht automatisch addieren.
+- „viele Artikel deiner Wahl" → MwSt-Aktion ist produktspezifisch, nicht pauschal.
