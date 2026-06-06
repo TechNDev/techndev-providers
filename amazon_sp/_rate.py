@@ -56,3 +56,7 @@ def _retry(func):
 # Modul-weite Instanzen — von catalog.py, pricing.py, fees.py, restrictions.py genutzt
 catalog_limiter = RateLimiter(min_interval_s=0.6)
 pricing_limiter = RateLimiter(min_interval_s=2.2)
+# getItemOffersBatch hat ein STRENGERES Limit als der Einzel-Call: 0,1 Req/s
+# (Burst 1) -> 1 Batch-Call/10 s. Pro Call aber bis 20 ASINs => ~2 ASIN/s
+# (4x Durchsatz + ~20x weniger HTTP-Calls vs. Einzel-getItemOffers).
+pricing_batch_limiter = RateLimiter(min_interval_s=10.0)

@@ -35,12 +35,12 @@ Import-Pattern (Git-Submodul unter providers/)
   from amazon_sp import search_by_ean, CatalogResult
 """
 from .catalog      import CatalogResult, search_by_ean, search_by_asin, search_by_brand, search_catalog
-from .pricing      import OffersResult, get_offers, get_item_price
+from .pricing      import OffersResult, get_offers, get_offers_batch, get_item_price
 from .fees         import estimate_fba_fees, get_fees_breakdown, get_last_fee_error
 from .restrictions import check_restrictions
 from ._credentials import configure, get_credentials
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 __all__ = [
     # Credential-Management
@@ -56,6 +56,7 @@ __all__ = [
     'search_catalog',
     # Preise & Angebote
     'get_offers',
+    'get_offers_batch',
     'get_item_price',
     # Gebuehren
     'estimate_fba_fees',

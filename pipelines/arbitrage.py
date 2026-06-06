@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipelines.arbitrage  v0.7.0
+pipelines.arbitrage  v0.9.0
 ============================
 Gemeinsamer Arbitrage-Flow: EAN/ASIN + Einkaufspreis → Amazon-Angebot (SP-API) +
 eBay-Markt → Profitabilitaet je Plattform (reseller_profitability).
@@ -32,6 +32,12 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.9.0  (2026-06-06)
+  - prefetched_offers: optionales {asin: OffersResult} (aus amazon_sp.get_offers_
+    batch). Wird bei der Amazon-Buy-Box bevorzugt; Fallback auf Einzel-get_offers,
+    wenn nicht vorab geholt oder der Batch-Eintrag fehlerhaft war. Spart in Massen-
+    Laeufen pro ASIN einen getItemOffers-Call (~4x Durchsatz). Marge unveraendert.
+
 v0.8.0  (2026-06-02)
   - eBay-Ausgangsversand gewichts-/massbasiert via techndev-tools/shipping.py
     (optionaler Sibling-Import). _ebay_shipping_for() ersetzt die ebay_shipping_cost-
@@ -230,6 +236,7 @@ def evaluate_arbitrage(
     fx_to_eur:          Optional[dict[str, float]] = None,
     prefetched_catalog: Optional[dict] = None,
     prefetched_fees:    Optional[dict] = None,
+    prefetched_offers:  Optional[dict] = None,
     ebay_min_sold_count: int = 0,
 ) -> ArbitrageResult:
     """
@@ -307,7 +314,13 @@ def evaluate_arbitrage(
     amazon_fba_input: Optional[dict] = None
     if asin:
         try:
-            offers = get_offers(asin, marketplace=marketplace)
+            # Vorab gebuendelte Offers (getItemOffersBatch, 20/Call) bevorzugen ->
+            # spart pro ASIN einen getItemOffers-Call in Massen-Laeufen. Fallback auf
+            # Einzelabruf, wenn nicht vorab geholt ODER der Batch-Eintrag fehlerhaft
+            # war (legit leere Treffer ohne Fehler werden unveraendert uebernommen).
+            offers = (prefetched_offers or {}).get(asin) if prefetched_offers else None
+            if offers is None or offers.error is not None:
+                offers = get_offers(asin, marketplace=marketplace)
             if offers.error:
                 res.errors.append(f"offers: {offers.error}")
 
