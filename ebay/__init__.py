@@ -82,7 +82,7 @@ from ._auth     import (
     SCOPE_BASIC, SCOPE_SOLD, SCOPE_ANALYTICS,
 )
 from .sold      import get_sold_listings, search_sold
-from .browse    import get_active_listings, search_active, get_item_gtin
+from .browse    import get_active_listings, search_active, get_item_gtin, get_item
 from .scraper   import scrape_sold
 from .analytics import (
     get_traffic_report  as get_seller_analytics,
@@ -98,6 +98,7 @@ __all__ = [
     'get_sold_listings',          # EAN/Query → SoldResult
     'get_active_listings',        # EAN/Query → ActiveResult
     'get_item_gtin',              # itemId → GTIN/EAN (Browse getItem)
+    'get_item',                   # itemId → {title,price,gtin,condition,url,...}
     'get_market_snapshot',        # EAN/Query → MarketSnapshot (sold + active)
     # ── Analytics (User-Token erforderlich) ──────────────────────────────────
     'get_seller_analytics',       # Traffic-Report → TrafficReport

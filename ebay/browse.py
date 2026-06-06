@@ -161,12 +161,8 @@ def search_active(
     return total, items, None
 
 
-def get_item_gtin(item_id: str, credentials: dict, marketplace: str = 'EBAY_DE') -> str | None:
-    """GTIN/EAN eines eBay-Items via Browse API getItem (oder None).
-
-    item_summary/search liefert KEINE GTIN -> dieser Detail-Call (1 Request/Item)
-    schliesst die Luecke fuer das Produkt-Matching (z.B. WOW-Deals als Preisquelle).
-    Robust: gibt None bei jedem Fehler (Token/HTTP/fehlende GTIN) zurueck."""
+def _get_item_json(item_id: str, credentials: dict, marketplace: str) -> dict | None:
+    """Roh-JSON eines eBay-Items via Browse API getItem (oder None bei Fehler)."""
     if not item_id:
         return None
     try:
@@ -175,7 +171,14 @@ def get_item_gtin(item_id: str, credentials: dict, marketplace: str = 'EBAY_DE')
     except Exception:                                    # noqa: BLE001
         return None
     browse_limiter.wait()
-    url = f"{api_base(credentials.get('env', 'production'))}/buy/browse/v1/item/{item_id}"
+    base = api_base(credentials.get('env', 'production'))
+    iid = str(item_id).strip()
+    # Legacy-Numeric-ID (z.B. aus /itm/<id> auf Deal-Seiten) -> get_item_by_legacy_id;
+    # RESTful-ID (v1|...|... aus item_summary/search) -> direkter item-Endpoint.
+    if iid.isdigit():
+        url = f"{base}/buy/browse/v1/item/get_item_by_legacy_id?legacy_item_id={iid}"
+    else:
+        url = f"{base}/buy/browse/v1/item/{iid}"
     try:
         resp = requests.get(url, headers={
             "Authorization":           f"Bearer {token}",
@@ -185,17 +188,47 @@ def get_item_gtin(item_id: str, credentials: dict, marketplace: str = 'EBAY_DE')
         resp.raise_for_status()
     except requests.RequestException:
         return None
-    data = resp.json()
+    return resp.json()
+
+
+def _gtin_from(data: dict) -> str | None:
     gtin = str(data.get("gtin") or "").strip()
     if gtin:
         return gtin
-    # Fallback: GTIN/EAN/UPC aus den localizedAspects
-    for asp in data.get("localizedAspects") or []:
+    for asp in data.get("localizedAspects") or []:       # Fallback: EAN/GTIN/UPC-Aspekt
         if str(asp.get("name") or "").upper() in ("GTIN", "EAN", "UPC"):
             v = str(asp.get("value") or "").strip()
             if v:
                 return v
     return None
+
+
+def get_item_gtin(item_id: str, credentials: dict, marketplace: str = 'EBAY_DE') -> str | None:
+    """GTIN/EAN eines eBay-Items via Browse getItem (oder None). item_summary/search
+    liefert keine GTIN -> dieser Detail-Call schliesst die Luecke fuer das Matching."""
+    data = _get_item_json(item_id, credentials, marketplace)
+    return _gtin_from(data) if data else None
+
+
+def get_item(item_id: str, credentials: dict, marketplace: str = 'EBAY_DE') -> dict | None:
+    """Volle Item-Details via Browse getItem (oder None):
+    {item_id, title, price, currency, gtin, condition, url, brand}. price/gtin koennen
+    None sein. Fuer Deal-Seiten (item_id -> Preis + GTIN in EINEM Call)."""
+    data = _get_item_json(item_id, credentials, marketplace)
+    if not data:
+        return None
+    pr = data.get("price") or {}
+    val = pr.get("value")
+    return {
+        "item_id":   str(item_id),
+        "title":     data.get("title") or "",
+        "price":     (float(val) if val is not None else None),
+        "currency":  pr.get("currency") or "EUR",
+        "gtin":      _gtin_from(data),
+        "condition": data.get("condition") or "",
+        "url":       data.get("itemWebUrl") or data.get("itemAffiliateWebUrl") or "",
+        "brand":     data.get("brand") or None,
+    }
 
 
 def _parse_items(raw_list: list[dict]) -> list[ActiveItem]:
