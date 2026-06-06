@@ -230,6 +230,7 @@ def evaluate_arbitrage(
     fx_to_eur:          Optional[dict[str, float]] = None,
     prefetched_catalog: Optional[dict] = None,
     prefetched_fees:    Optional[dict] = None,
+    ebay_min_sold_count: int = 0,
 ) -> ArbitrageResult:
     """
     Bewertet den Wiederverkauf eines Produkts auf Amazon (FBA) und eBay.
@@ -458,9 +459,10 @@ def evaluate_arbitrage(
                     # Versand gewichts-/massbasiert (SP-API-Masse), sonst Pauschale.
                     ship = _ebay_shipping_for(res, ebay_shipping_cost)
                     ebay_input = {
-                        'item_price':    ebay_price,
-                        'shipping_cost': ship,
-                        'sold_count':    sold.count,
+                        'item_price':     ebay_price,
+                        'shipping_cost':  ship,
+                        'sold_count':     sold.count,
+                        'min_sold_count': ebay_min_sold_count,
                     }
             except Exception as e:                           # noqa: BLE001
                 res.errors.append(f"ebay: {type(e).__name__}: {e}")
