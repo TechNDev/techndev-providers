@@ -161,6 +161,43 @@ def search_active(
     return total, items, None
 
 
+def get_item_gtin(item_id: str, credentials: dict, marketplace: str = 'EBAY_DE') -> str | None:
+    """GTIN/EAN eines eBay-Items via Browse API getItem (oder None).
+
+    item_summary/search liefert KEINE GTIN -> dieser Detail-Call (1 Request/Item)
+    schliesst die Luecke fuer das Produkt-Matching (z.B. WOW-Deals als Preisquelle).
+    Robust: gibt None bei jedem Fehler (Token/HTTP/fehlende GTIN) zurueck."""
+    if not item_id:
+        return None
+    try:
+        token = get_token(credentials["client_id"], credentials["client_secret"],
+                          scope=SCOPE_BASIC, env=credentials.get("env", "production"))
+    except Exception:                                    # noqa: BLE001
+        return None
+    browse_limiter.wait()
+    url = f"{api_base(credentials.get('env', 'production'))}/buy/browse/v1/item/{item_id}"
+    try:
+        resp = requests.get(url, headers={
+            "Authorization":           f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": marketplace,
+            "Accept":                  "application/json",
+        }, timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return None
+    data = resp.json()
+    gtin = str(data.get("gtin") or "").strip()
+    if gtin:
+        return gtin
+    # Fallback: GTIN/EAN/UPC aus den localizedAspects
+    for asp in data.get("localizedAspects") or []:
+        if str(asp.get("name") or "").upper() in ("GTIN", "EAN", "UPC"):
+            v = str(asp.get("value") or "").strip()
+            if v:
+                return v
+    return None
+
+
 def _parse_items(raw_list: list[dict]) -> list[ActiveItem]:
     """Parst Browse-API-Ergebnisse in ActiveItem-Objekte."""
     items: list[ActiveItem] = []
