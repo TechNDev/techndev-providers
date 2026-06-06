@@ -29,7 +29,7 @@ from pathlib import Path
 
 from gsheets import GSheetsAuthError, GSheetsClient
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 def _cfg() -> dict:
@@ -58,7 +58,10 @@ def main(argv=None) -> int:
         print("FEHLER: --sheet (oder gsheets_config.json / GSHEET_EXPORT_SHEET) noetig.", file=sys.stderr)
         return 1
 
-    raw = (Path(args.infile).read_text(encoding="utf-8") if args.infile else sys.stdin.read()).strip()
+    # stdin explizit als UTF-8 dekodieren (Windows-Default waere cp1252 -> Umlaut-
+    # Mojibake bei Headern/Titeln wie "geprueft"/Umlauten).
+    raw = (Path(args.infile).read_text(encoding="utf-8") if args.infile
+           else sys.stdin.buffer.read().decode("utf-8")).strip()
     rows = json.loads(raw) if raw else []
     if isinstance(rows, dict):
         rows = rows.get("results") or rows.get("items") or []
