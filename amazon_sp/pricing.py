@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-amazon_sp  pricing.py  v1.3.0
+amazon_sp  pricing.py  v1.3.1
 ================================
 Angebote, Buy-Box-Preis und Wettbewerbspreise via ProductsV0 API.
 
@@ -10,6 +10,13 @@ Merges beider bisheriger Implementierungen:
 
 CHANGELOG
 ---------
+v1.3.1  (2026-06-07)
+  - lowest_new_price: Minimum ueber ALLE "New"-LowestPrices (FBA+FBM) statt des
+    ersten Eintrags (break) — der erste war oft der teurere FBA-Preis. Zusaetzlich
+    Absicherung gegen den guenstigsten real gelieferten offers_detail-Landed-Preis.
+    Fix fuer falschen "Buy-Box"-Fallback (z.B. 119,90 statt 91,99 bei Listings
+    ohne Buy-Box).
+
 v1.3.0  (2026-06-06)
   - get_offers_batch(): Buy-Box/Angebote fuer bis zu 20 ASINs/Call via
     getItemOffersBatch (eigener pricing_batch_limiter, 0,1 Req/s). ~4x Durchsatz
@@ -43,7 +50,7 @@ from ._rate import _retry, pricing_limiter, pricing_batch_limiter
 from ._credentials import get_credentials
 from ._helpers import get_marketplace, get_marketplace_id, get_amazon_seller_id
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -111,14 +118,19 @@ def _parse_offers_payload(payload: dict, amazon_seller: str) -> OffersResult:
                 break
 
     # ── Niedrigster Neupreis (EAN2JTL Fallback fuer amazon_price) ──────────────
+    # WICHTIG: Summary.LowestPrices fuehrt je Fulfillment-Kanal einen eigenen
+    # "New"-Eintrag (FBA und FBM getrennt). Frueher nahm ein break() den ersten —
+    # das war oft der teurere FBA-Eintrag (z.B. 119,90), obwohl FBM viel guenstiger
+    # ist. Daher das MINIMUM ueber alle Neu-Eintraege bilden (kein break).
     lowest_new_price = None
     for lp in summary.get('LowestPrices', []):
         if lp.get('condition', '').lower() in ('new', 'neu'):
             node = lp.get('LandedPrice') or lp.get('ListingPrice') or {}
             amt  = node.get('Amount')
             if amt is not None:
-                lowest_new_price = float(amt)
-                break
+                amt = float(amt)
+                if lowest_new_price is None or amt < lowest_new_price:
+                    lowest_new_price = amt
 
     # ── Buy-Box-Dominanz & Amazon-Praesenz ─────────────────────────────────────
     amazon_on_listing = any(o.get('SellerId') == amazon_seller for o in offers)
@@ -142,6 +154,16 @@ def _parse_offers_payload(payload: dict, amazon_seller: str) -> OffersResult:
     # Buy-Box-Gewinner zuerst, dann nach Landed-Preis aufsteigend.
     offers_detail.sort(key=lambda x: (not x['is_buy_box_winner'],
                                       x['price'] if x['price'] is not None else 9e9))
+
+    # Summary.LowestPrices kann je Kanal abweichen oder veraltet sein — die real
+    # zurueckgelieferten Angebote (Landed = ListingPrice + Shipping) sind
+    # massgeblich. Niedrigsten daraus als zusaetzliche Untergrenze heranziehen,
+    # damit der Fallback-Preis nie ueber dem guenstigsten echten Angebot liegt.
+    _offer_prices = [o['price'] for o in offers_detail if o.get('price') is not None]
+    if _offer_prices:
+        _offers_min = min(_offer_prices)
+        if lowest_new_price is None or _offers_min < lowest_new_price:
+            lowest_new_price = _offers_min
 
     return OffersResult(
         total_sellers_new=total_new,
