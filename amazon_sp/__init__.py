@@ -39,8 +39,10 @@ from .pricing      import OffersResult, get_offers, get_offers_batch, get_item_p
 from .fees         import estimate_fba_fees, get_fees_breakdown, get_last_fee_error
 from .restrictions import check_restrictions
 from ._credentials import configure, get_credentials
+from ._helpers     import (get_marketplace, get_marketplace_id, get_vat,
+                           get_currency, is_eur_market)
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 
 __all__ = [
     # Credential-Management
@@ -64,4 +66,10 @@ __all__ = [
     'get_last_fee_error',
     # Verkaufserlaubnis
     'check_restrictions',
+    # Marktplatz-Tabellen (Markt/USt/Waehrung)
+    'get_marketplace',
+    'get_marketplace_id',
+    'get_vat',
+    'get_currency',
+    'is_eur_market',
 ]
