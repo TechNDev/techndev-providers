@@ -32,6 +32,9 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.10.0  (2026-06-12)
+  - dst_pct durchgereicht in den amazon_fba-Input von qualify_all (W10
+    DigitalServicesFee-Kalibrierung). Default 0.0 = Marge unveraendert.
 v0.9.0  (2026-06-06)
   - prefetched_offers: optionales {asin: OffersResult} (aus amazon_sp.get_offers_
     batch). Wird bei der Amazon-Buy-Box bevorzugt; Fallback auf Einzel-get_offers,
@@ -231,6 +234,7 @@ def evaluate_arbitrage(
     ebay_marketplace:   str = 'EBAY_DE',
     include_ebay:       bool = True,
     mwst_rate:          float = 0.19,
+    dst_pct:            float = 0.0,
     ebay_shipping_cost: float = 6.0,
     eu_marketplaces:    Optional[list[str]] = None,
     fx_to_eur:          Optional[dict[str, float]] = None,
@@ -419,6 +423,7 @@ def evaluate_arbitrage(
                     'vk_brutto':         buy_box,
                     'fba_fee_netto':     fba_fee_netto if fba_fee_netto is not None else 0.0,
                     'referral_pct':      referral_pct,
+                    'dst_pct':           dst_pct,   # W10: DigitalServicesFee-Kalibrierung
                     'bsr':               bsr,
                     'category':          category,
                     'rating':            rating,
