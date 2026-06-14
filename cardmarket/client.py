@@ -181,15 +181,19 @@ class CardmarketClient:
 
     def get_cheapest_offer(self, id_product, *, commercial_only: bool = False,
                            country: str | None = None, min_count: int = 1,
-                           condition: str = "MT", max_results: int = 20) -> dict | None:
+                           condition: str = "MT", id_language: int | None = None,
+                           max_results: int = 20) -> dict | None:
         """
         LIVE guenstigstes passendes Angebot via /articles (preis-sortiert).
-        Filter: optional gewerblich + Land + Mindestmenge. Rueckgabe:
+        Filter: optional gewerblich + Land + Mindestmenge + Sprache (id_language —
+        Cardmarket fuehrt ein Produkt je Set, die Sprache wird per Filter
+        unterschieden; muss zur Sprache des Quell-EAN passen). Rueckgabe:
         {price, shipping, count, is_commercial, country, vat, seller, condition}
         oder None.
         """
         path = (f"/articles/{id_product}?minCondition={condition}"
-                f"&start=0&maxResults={max_results}")
+                f"&start=0&maxResults={max_results}"
+                + (f"&idLanguage={id_language}" if id_language else ""))
         arts = (self._get(path, timeout=60)[1] or {}).get("article", []) or []
         for a in arts:                                     # bereits aufsteigend nach Preis
             s = a.get("seller", {}) or {}
