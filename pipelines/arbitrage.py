@@ -290,6 +290,12 @@ def evaluate_arbitrage(
         if cat is None:
             if ean:
                 cat = search_by_ean(ean, marketplace=marketplace)
+                # Fallback: Amazons CatalogItems-EAN-Index ist gelegentlich
+                # unvollstaendig/inkonsistent (Storefront-Suche findet den Artikel,
+                # die Identifier-API nicht). Ist die ASIN bekannt (Merkliste/Import),
+                # per ASIN nachschlagen, statt das findbare Produkt aufzugeben.
+                if asin and (cat.error or not cat.asin):
+                    cat = search_by_asin(asin, marketplace=marketplace)
             else:
                 cat = search_by_asin(asin, marketplace=marketplace)
         if cat.error:
