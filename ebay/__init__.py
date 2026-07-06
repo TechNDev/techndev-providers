@@ -91,7 +91,7 @@ from .analytics import (
     ALL_METRICS, DEFAULT_METRICS,
 )
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 __all__ = [
     # ── Hauptfunktionen (analog amazon_sp) ───────────────────────────────────

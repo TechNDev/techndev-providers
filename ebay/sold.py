@@ -28,11 +28,11 @@ v1.0.0  (2026-05-25)
 """
 from __future__ import annotations
 
-from ._models import SoldItem, SoldResult, _price_stats, now_iso
+from ._models import SoldItem, SoldResult, _price_stats, _robust_trim, now_iso
 from ._rate   import _retry, scraper_limiter
 from .scraper import scrape_sold
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -80,15 +80,28 @@ def get_sold_listings(
     scraper_limiter.wait()
     total, items, error = scrape_sold(query, marketplace, limit, new_only, fixed_price_only)
 
-    # Ausreisser-Filter
+    # ── Ausreisser-Filter (1): expliziter Preis-Cutoff des Aufrufers ──────────────
     filtered_count = 0
     if min_price_filter is not None:
         before = len(items)
         items  = [i for i in items if i.price is None or i.price >= min_price_filter]
         filtered_count = before - len(items)
 
-    prices = [i.price for i in items if i.price is not None]
+    # ── Ausreisser-Filter (2): robustes Median-Band ──────────────────────────────
+    # Auch nach Relevanz-Filter (scraper) enthalten Sold-Treffer Zubehoer/Anleitungen/
+    # Bundles/Fehl-Matches mit stark abweichenden Preisen. _robust_trim() bildet den
+    # Median ueber den dichten Preis-Cluster -> stabil UND reproduzierbar. Die stats
+    # basieren auf dem getrimmten Cluster; `count` = Groesse des Clusters (die Basis,
+    # auf der auch der product-catalog-Guard sold_count>=N sinnvoll greift).
+    all_prices   = [i.price for i in items if i.price is not None]
+    prices       = _robust_trim(all_prices)
+    filtered_count += len(all_prices) - len(prices)
     med, mn_mean, mn, mx = _price_stats(prices)
+
+    # Anzeige-Cap: Statistik lief ueber den vollen Pool (Reproduzierbarkeit); die
+    # zurueckgegebene Item-Liste wird auf `limit` begrenzt (UI/Transport). Die Stats
+    # (median/mean/min/max/count) bleiben davon unberuehrt.
+    items = items[:max(1, limit)]
 
     return SoldResult(
         query          = query,

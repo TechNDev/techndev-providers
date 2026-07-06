@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-techndev-providers  ebay/scraper.py  v1.3.0
+techndev-providers  ebay/scraper.py  v1.4.0
 =============================================
 eBay-Scraper fuer abgeschlossene (verkaufte) Listings.
 
@@ -18,6 +18,21 @@ Nur fuer eigene Recherche / nicht-kommerziellen Eigengebrauch.
 
 CHANGELOG
 ---------
+v1.4.0  (2026-07-06)
+  - REPRODUZIERBARKEIT: median_sold schwankte zwischen Laeufen massiv trotz
+    stabilem sold_count. Ursache: (a) Best-Match liefert je Abruf eine ~40%
+    andere Top-N-Teilmenge (Rotation), (b) breite Titel-Query zieht Fehl-Matches
+    (falsche Sets, Bootlegs, Zubehoer @ 1-5 EUR) in die Preisbasis. Fixes:
+    1. Grosse Stichprobe: intern immer _SAMPLE_IPG (200) statt nur `limit` laden
+       -> nahezu vollstaendiger Pool -> Rotation faellt weg (Median stabil).
+    2. Relevanz-Filter _is_relevant(): je Item Titel gegen Query-Tokens pruefen
+       (Set-/Modellnummern 4-7-stellig muessen vorkommen) -> Fehl-Matches raus.
+    3. 'Verkauft'-Marker PFLICHT (require_sold=True): schuetzt gegen kuenftiges
+       Auffuellen der Sold-Seite mit aktiven/verwandten Listings.
+    4. Retry-on-empty: 0 Treffer bei plausibler Vollseite -> Session-Reset + 1
+       Retry (faengt Soft-Empty/Soft-Challenge, die _is_challenge (<100KB) verfehlt).
+    Robustes Median-Trimmen liegt in _models._robust_trim (via sold.py).
+
 v1.3.0  (2026-05-28)
   - Rolle aenderung: scrape_sold() ist jetzt PRIMARY (nicht mehr Fallback).
     Wird direkt von sold.search_sold() aufgerufen; kein API-Versuch davor.
@@ -48,9 +63,14 @@ import requests
 
 from ._models import SoldItem
 
-__version__ = "1.2.0"
+__version__ = "1.4.0"
 
 TIMEOUT = 30
+
+# Interne Stichprobengroesse: unabhaengig vom `limit` des Aufrufers laden wir eine
+# grosse Seite, damit wir (nahezu) den vollstaendigen Sold-Pool sehen. Das eliminiert
+# die Best-Match-Rotation als Ursache instabiler Mediane. eBay-Maximum fuer _ipg = 240.
+_SAMPLE_IPG = 200
 
 # ── Domain-Map: Marketplace-ID → eBay-Domain ──────────────────────────────────
 _DOMAINS: dict[str, str] = {
@@ -160,6 +180,50 @@ _RE_SOLD_DATE = re.compile(
 _RE_TAGS = re.compile(r'<[^>]+>')
 
 
+# ── Relevanz-Filter ────────────────────────────────────────────────────────────
+# Die eBay-Sold-Suche liefert (Best Match) auch off-target Treffer: falsche
+# Set-/Modellnummern, Zubehoer, Bundles. _is_relevant() haelt nur Listings, deren
+# Titel die diskriminierenden Query-Tokens enthaelt.
+#
+# Diskriminatoren = Zahlen mit 4-7 Stellen (LEGO-Set-Nr, Modell-Nr, Artikel-Nr).
+# Eine reine EAN/GTIN (>=12 Stellen) wird NICHT als Titel-Pflichttoken verlangt:
+# eBay matcht GTINs katalogseitig, sie stehen selten im Titel. Fehlen 4-7-stellige
+# Zahlen ganz, greift eine Mehrheits-Pruefung auf den Alpha-Tokens der Query.
+_RE_NUM      = re.compile(r'\d+')
+_RE_ALPHATOK = re.compile(r'[A-Za-zÀ-ÿ]{3,}')
+_STOPWORDS   = {
+    'lego', 'der', 'die', 'das', 'und', 'für', 'fuer', 'the', 'and', 'set', 'sets',
+    'neu', 'new', 'ovp', 'misb', 'nib', 'sealed', 'versiegelt', 'original', 'stück',
+    'stueck', 'teile', 'pcs', 'con', 'von',
+}
+
+
+def _significant_numbers(query: str) -> list[str]:
+    """Set-/Modellnummern der Query (4-7 Stellen). EANs (>=12) ausgeschlossen."""
+    return [t for t in _RE_NUM.findall(query) if 4 <= len(t) <= 7]
+
+
+def _is_relevant(title: str, query: str) -> bool:
+    """
+    True wenn `title` plausibel zum gesuchten Produkt gehoert.
+
+    Regel 1: Enthaelt die Query 4-7-stellige Nummern (Set-/Modellnr), MUSS jede
+             davon im Titel vorkommen -> filtert falsche Sets/Modelle zuverlaessig.
+    Regel 2: Keine solche Nummer -> Mehrheit der Alpha-Tokens (ohne Stopwords)
+             muss im Titel stehen.
+    Leere/degenerierte Query -> True (kein Filter, fail-open).
+    """
+    nums = _significant_numbers(query)
+    tl   = title.lower()
+    if nums:
+        return all(n in title for n in nums)
+    toks = [w.lower() for w in _RE_ALPHATOK.findall(query) if w.lower() not in _STOPWORDS]
+    if not toks:
+        return True
+    hits = sum(1 for w in toks if w in tl)
+    return hits >= max(1, (len(toks) + 1) // 2)
+
+
 def scrape_sold(
     query: str,
     marketplace:      str  = 'EBAY_DE',
@@ -172,19 +236,26 @@ def scrape_sold(
 
     query:            EAN oder Freitext-Suchbegriff.
     marketplace:      EBAY_DE | EBAY_US | EBAY_UK | ... (Default: EBAY_DE)
-    limit:            Max. Ergebnisse (1-200).
+    limit:            Anzeige-Cap fuer die zurueckgegebene Item-Liste (1-200).
+                      HINWEIS: die Statistik-Basis in sold.get_sold_listings ist der
+                      VOLLE relevante Pool (grosse Stichprobe), NICHT auf limit
+                      geschnitten — sonst haenge der Median an der Best-Match-
+                      Reihenfolge und driftete wieder. limit begrenzt nur die Liste.
     new_only:         Nur Zustand Neu (LH_ItemCondition=3).
     fixed_price_only: Nur Sofort-Kaufen (LH_BIN=1).
 
     Rueckgabe: (total, items, error_or_None) — identisch zu search_sold().
+      items = voller relevanz-gefilterter Sold-Pool (nicht auf limit geschnitten).
     """
     domain = _DOMAINS.get(marketplace.upper(), 'www.ebay.de')
 
+    # Intern immer eine grosse Stichprobe laden (nicht nur `limit`): so sehen wir
+    # nahezu den gesamten Sold-Pool und sind gegen die Best-Match-Rotation immun.
     params: dict = {
         '_nkw':        query,
         'LH_Sold':     '1',
         'LH_Complete': '1',
-        '_ipg':        str(min(max(1, limit), 200)),
+        '_ipg':        str(_SAMPLE_IPG),
     }
     if fixed_price_only:
         params['LH_BIN'] = '1'
@@ -212,7 +283,26 @@ def scrape_sold(
 
     html  = resp.text
     total = _parse_total(html)
-    items = _parse_items(html)[:limit]
+    items = _parse_items(html, query=query)
+
+    # Retry-on-empty: 0 Treffer trotz plausibler Vollseite (>200 KB) und total>0 deutet
+    # auf Soft-Empty/Soft-Challenge, die _is_challenge (<100 KB) nicht erkennt. Ein
+    # Session-Reset + Retry glaettet diese Transienten (sonst: aspirational Fallback).
+    if not items and len(resp.content) > 200_000 and (total or 0) > 0:
+        _sessions.pop(domain, None)
+        session = _get_session(domain)
+        try:
+            resp = session.get(url, params=params, timeout=TIMEOUT)
+            if resp.ok and not _is_challenge(resp):
+                html  = resp.text
+                total = _parse_total(html) or total
+                items = _parse_items(html, query=query)
+        except requests.RequestException:
+            pass   # Erstantwort behalten (leer) — kein harter Fehler
+
+    # KEIN [:limit]-Schnitt hier: der volle relevante Pool geht an sold.py, damit
+    # der Median reproduzierbar ist (nicht abhaengig von der Best-Match-Reihenfolge).
+    # Das Anzeige-Cap `limit` wendet sold.get_sold_listings auf die Item-Liste an.
     return total, items, None
 
 
@@ -256,11 +346,21 @@ def _parse_price(block: str) -> float | None:
     return price if 0.01 <= price <= 1_000_000 else None
 
 
-def _parse_items(html: str) -> list[SoldItem]:
+def _parse_items(
+    html:         str,
+    query:        str | None = None,
+    require_sold: bool       = True,
+) -> list[SoldItem]:
     """
     Parst alle s-card-Bloecke aus dem HTML.
     Split an <li class="s-card"-Grenzen; je Block Preis/Titel/URL/Datum extrahieren.
     Sponsored Items (URL ohne www → kein _RE_URL-Match) werden automatisch gefiltert.
+
+    require_sold: Block MUSS einen 'Verkauft'-Datum-Marker tragen (Default True).
+                  Schuetzt gegen aktive/verwandte Listings, mit denen eBay die
+                  Sold-Seite bei duennen Ergebnissen auffuellt.
+    query:        Wenn gesetzt, wird je Block _is_relevant(title, query) geprueft;
+                  off-target Treffer (falsche Set-/Modellnr) werden verworfen.
     """
     # Aufteilen am Start jedes s-card-Tags
     parts = re.split(r'(?=<li\b[^>]*\bclass="s-card\b)', html, flags=re.IGNORECASE)
@@ -275,6 +375,12 @@ def _parse_items(html: str) -> list[SoldItem]:
         item_url = um.group(1)
         item_id  = um.group(2)
 
+        # Verkaufsdatum — bei require_sold Pflicht (filtert aktive/related Fuelltreffer)
+        dm        = _RE_SOLD_DATE.search(block)
+        sold_date = dm.group(1).strip() if dm else ''
+        if require_sold and not dm:
+            continue
+
         # Preis
         price = _parse_price(block)
 
@@ -288,11 +394,9 @@ def _parse_items(html: str) -> list[SoldItem]:
                 raw = raw.split(noise)[0].strip()
             title = raw or '-'
 
-        # Verkaufsdatum (Best-Effort)
-        sold_date = ''
-        dm = _RE_SOLD_DATE.search(block)
-        if dm:
-            sold_date = dm.group(1).strip()
+        # Relevanz-Filter: off-target Treffer (falsches Set/Modell) verwerfen
+        if query and title != '-' and not _is_relevant(title, query):
+            continue
 
         items.append(SoldItem(
             title          = title,
