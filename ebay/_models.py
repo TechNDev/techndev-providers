@@ -6,6 +6,12 @@ Datenklassen fuer den eBay-Provider.
 
 CHANGELOG
 ---------
+v2.1.0  (2026-07-06)
+  - _robust_trim(): iteratives Ausreisser-Trimmen (Median-Band [0.5x, 2x]).
+    Kernbaustein gegen instabile/verunreinigte median_sold-Werte — entfernt
+    Zubehoer/Anleitungen/Bundles/Fehl-Matches, die den Median verzerren.
+    Deterministisch (nur von der Preisliste abhaengig, nicht von der Reihenfolge).
+
 v2.0.0  (2026-05-28)
   - SoldResult:   Reiches Ergebnisobjekt fuer get_sold_listings()
                   Analog zu amazon_sp.CatalogResult / OffersResult.
@@ -24,7 +30,7 @@ from datetime import datetime
 from statistics import mean, median
 from typing import Optional
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -241,6 +247,47 @@ def _price_stats(
         round(min(prices), 2),
         round(max(prices), 2),
     )
+
+
+def _robust_trim(
+    prices: list[float],
+    lo_factor: float = 0.5,
+    hi_factor: float = 2.0,
+    max_iter:  int   = 5,
+    min_keep:  int   = 3,
+) -> list[float]:
+    """
+    Entfernt Preis-Ausreisser iterativ um den Median herum.
+
+    Motivation: eBay-Sold-Treffer sind (auch nach Relevanz-Filter) mit Zubehoer,
+    Anleitungen, Ersatzteilen, Bundles und Fehl-Matches durchsetzt. Deren Preise
+    spannen 0.01 .. Vielfaches des echten Set-Preises. Der rohe Median darueber ist
+    (a) falsch und (b) instabil, weil eBay je Abruf eine leicht andere Teilmenge
+    liefert. Das Trimmen auf ein Median-Band macht die Aggregation robust UND
+    reproduzierbar (Ergebnis haengt nur von der Preismenge ab, nicht von Reihenfolge
+    oder davon, welche Randfaelle gerade zurueckkamen).
+
+    Vorgehen: Median m berechnen, nur Preise in [lo_factor*m, hi_factor*m] behalten,
+    wiederholen bis stabil oder max_iter. Bei < min_keep Preisen wird nicht getrimmt
+    (zu wenig Datenbasis fuer eine belastbare Bandbreite).
+
+    Gibt die getrimmte, aufsteigend sortierte Liste zurueck (kann == Eingabe sein).
+    """
+    ps = sorted(p for p in prices if p is not None)
+    if len(ps) < min_keep:
+        return ps
+    for _ in range(max_iter):
+        m = median(ps)
+        if m <= 0:
+            break
+        kept = [p for p in ps if lo_factor * m <= p <= hi_factor * m]
+        if len(kept) < min_keep or len(kept) == len(ps):
+            # Nicht weiter trimmen: entweder stabil oder zu wenig uebrig.
+            if len(kept) >= min_keep:
+                ps = kept
+            break
+        ps = kept
+    return ps
 
 
 def _calc_str(sold_total: Optional[int], active_total: Optional[int]) -> Optional[float]:
