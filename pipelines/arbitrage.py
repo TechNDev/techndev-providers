@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipelines.arbitrage  v0.9.0
+pipelines.arbitrage  v0.11.0
 ============================
 Gemeinsamer Arbitrage-Flow: EAN/ASIN + Einkaufspreis → Amazon-Angebot (SP-API) +
 eBay-Markt → Profitabilitaet je Plattform (reseller_profitability).
@@ -32,6 +32,16 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.11.0  (2026-07-06)
+  - eBay-Marktpreis nur noch aus VERKAUFTEN Angeboten (sold.best_price). Der
+    bisherige Fallback auf active.best_price (Median aktiver Angebots-/Wunschpreise)
+    ist entfernt — er erzeugte aspirational Margen, wenn Sold leer war (bei EAN-
+    Suche fast immer). Ohne Sold-Signal -> kein eBay-Input. active.median_price wird
+    zur Transparenz separat in ebay_snapshot['active_median'] gefuehrt (nicht margenwirksam).
+    Zusammen mit ebay v1.4.0/2.2.0 (Relevanz-Filter + robustes Median-Trimmen)
+    stabilisiert das median_sold reproduzierbar.
+  - HINWEIS: v0.10.0 (dst_pct/W10) liegt auf feat/eu-marketplaces; auf master von
+    v0.9.0 direkt auf v0.11.0 (die dst_pct-Aenderung kommt beim EU-Merge dazu).
 v0.9.0  (2026-06-06)
   - prefetched_offers: optionales {asin: OffersResult} (aus amazon_sp.get_offers_
     batch). Wird bei der Amazon-Buy-Box bevorzugt; Fallback auf Einzel-get_offers,
@@ -133,7 +143,7 @@ try:
 except Exception:                                                            # noqa: BLE001
     _calc_shipping = None
 
-__version__ = "0.8.0"
+__version__ = "0.11.0"
 
 
 def _ebay_shipping_for(res, fallback: float) -> float:
@@ -452,7 +462,12 @@ def evaluate_arbitrage(
 
                 sold       = snap.sold
                 active     = snap.active
-                ebay_price = sold.best_price if sold.best_price is not None else active.best_price
+                # Marktpreis = Median der VERKAUFTEN Angebote. Aktive Angebotspreise
+                # sind Wunschpreise (aspirational) und werden NICHT als Marktpreis
+                # verwendet — sie wuerden die Marge kuenstlich beschoenigen. Ohne
+                # Sold-Signal -> ebay_price None -> kein eBay-Input (keine Scheinmarge).
+                # active.median_price bleibt separat sichtbar (Referenz Angebotsseite).
+                ebay_price = sold.best_price
 
                 res.ebay_snapshot = {
                     'query':             query,
@@ -461,6 +476,7 @@ def evaluate_arbitrage(
                     'sold_count':        sold.count,
                     'sold_total':        sold.total,
                     'active_total':      active.total,
+                    'active_median':     active.median_price,   # nur Referenz, NICHT Marge
                     'sell_through_rate': snap.sell_through_rate,
                 }
                 if not snap.ok():
