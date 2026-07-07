@@ -1,5 +1,5 @@
 """
-amazon_sp  v1.7.0
+amazon_sp  v1.10.0
 ==================
 Amazon Selling Partner API Provider fuer TechNDev Tools.
 Gemeinsame Bibliothek fuer EAN2JTL und amz-einkauf.
@@ -13,6 +13,9 @@ Oeffentliche API
   from amazon_sp import get_fees_breakdown               # FBA-Gebuehren (Detail)
   from amazon_sp import get_last_fee_error               # Letzter Fees-Fehler
   from amazon_sp import check_restrictions               # Verkaufserlaubnis
+  from amazon_sp import request_report                    # Reports-API (generisch)
+  from amazon_sp import ledger_detail, reimbursements     # Reports-API (getypt)
+  from amazon_sp import customer_returns, removal_order_detail
   from amazon_sp import CatalogResult, OffersResult      # Datenmodelle
   from amazon_sp import configure, get_credentials       # Credential-Management
 
@@ -38,11 +41,15 @@ from .catalog      import CatalogResult, search_by_ean, search_by_asin, search_b
 from .pricing      import OffersResult, get_offers, get_offers_batch, get_item_price
 from .fees         import estimate_fba_fees, get_fees_breakdown, get_last_fee_error
 from .restrictions import check_restrictions
+from .reports      import (
+    request_report, ledger_detail, reimbursements,
+    customer_returns, removal_order_detail,
+)
 from ._credentials import configure, get_credentials
 from ._helpers     import (get_marketplace, get_marketplace_id, get_vat,
                            get_currency, is_eur_market)
 
-__version__ = "1.9.0"
+__version__ = "1.10.0"
 
 __all__ = [
     # Credential-Management
@@ -72,4 +79,10 @@ __all__ = [
     'get_vat',
     'get_currency',
     'is_eur_market',
+    # Reports-API
+    'request_report',
+    'ledger_detail',
+    'reimbursements',
+    'customer_returns',
+    'removal_order_detail',
 ]
