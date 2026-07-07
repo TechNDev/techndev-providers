@@ -40,8 +40,10 @@ v0.11.0  (2026-07-06)
     zur Transparenz separat in ebay_snapshot['active_median'] gefuehrt (nicht margenwirksam).
     Zusammen mit ebay v1.4.0/2.2.0 (Relevanz-Filter + robustes Median-Trimmen)
     stabilisiert das median_sold reproduzierbar.
-  - HINWEIS: v0.10.0 (dst_pct/W10) liegt auf feat/eu-marketplaces; auf master von
-    v0.9.0 direkt auf v0.11.0 (die dst_pct-Aenderung kommt beim EU-Merge dazu).
+    (master->feat/eu-marketplaces gemerged; dst_pct aus v0.10.0 bleibt erhalten.)
+v0.10.0  (2026-06-12)
+  - dst_pct durchgereicht in den amazon_fba-Input von qualify_all (W10
+    DigitalServicesFee-Kalibrierung). Default 0.0 = Marge unveraendert.
 v0.9.0  (2026-06-06)
   - prefetched_offers: optionales {asin: OffersResult} (aus amazon_sp.get_offers_
     batch). Wird bei der Amazon-Buy-Box bevorzugt; Fallback auf Einzel-get_offers,
@@ -241,6 +243,7 @@ def evaluate_arbitrage(
     ebay_marketplace:   str = 'EBAY_DE',
     include_ebay:       bool = True,
     mwst_rate:          float = 0.19,
+    dst_pct:            float = 0.0,
     ebay_shipping_cost: float = 6.0,
     eu_marketplaces:    Optional[list[str]] = None,
     fx_to_eur:          Optional[dict[str, float]] = None,
@@ -296,6 +299,12 @@ def evaluate_arbitrage(
         if cat is None:
             if ean:
                 cat = search_by_ean(ean, marketplace=marketplace)
+                # Fallback: Amazons CatalogItems-EAN-Index ist gelegentlich
+                # unvollstaendig/inkonsistent (Storefront-Suche findet den Artikel,
+                # die Identifier-API nicht). Ist die ASIN bekannt (Merkliste/Import),
+                # per ASIN nachschlagen, statt das findbare Produkt aufzugeben.
+                if asin and (cat.error or not cat.asin):
+                    cat = search_by_asin(asin, marketplace=marketplace)
             else:
                 cat = search_by_asin(asin, marketplace=marketplace)
         if cat.error:
@@ -429,6 +438,7 @@ def evaluate_arbitrage(
                     'vk_brutto':         buy_box,
                     'fba_fee_netto':     fba_fee_netto if fba_fee_netto is not None else 0.0,
                     'referral_pct':      referral_pct,
+                    'dst_pct':           dst_pct,   # W10: DigitalServicesFee-Kalibrierung
                     'bsr':               bsr,
                     'category':          category,
                     'rating':            rating,

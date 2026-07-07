@@ -19,6 +19,10 @@ _MARKETPLACE_MAP: dict[str, Marketplaces] = {
     'IT': Marketplaces.IT,
     'ES': Marketplaces.ES,
     'UK': Marketplaces.UK,
+    'NL': Marketplaces.NL,
+    'BE': Marketplaces.BE,
+    'SE': Marketplaces.SE,
+    'PL': Marketplaces.PL,
 }
 
 _MARKETPLACE_IDS: dict[str, str] = {
@@ -27,6 +31,10 @@ _MARKETPLACE_IDS: dict[str, str] = {
     'IT': 'APJ6JRA9NG5V4',
     'ES': 'A1RKKUPIHCS9HS',
     'UK': 'A1F83G8C2ARO7P',
+    'NL': 'A1805IZSGTT6HS',
+    'BE': 'AMEN7PMS3EDWL',
+    'SE': 'A2NODRKZP88ZB9',
+    'PL': 'A1C3SOZRARQ6R3',
 }
 
 # Bekannte Amazon-Eigenhaendler-IDs je Marktplatz
@@ -38,15 +46,79 @@ _AMAZON_SELLER_IDS: dict[str, str] = {
     'UK': 'A3P5ROKL5A1OLE',
 }
 
+# Standard-USt-Satz je Marktplatz (Zielland; fuer OSS-B2C-Margenrechnung).
+_MARKETPLACE_VAT: dict[str, float] = {
+    'DE': 0.19, 'FR': 0.20, 'IT': 0.22, 'ES': 0.21, 'UK': 0.20,
+    'NL': 0.21, 'BE': 0.21, 'SE': 0.25, 'PL': 0.23,
+}
 
-def get_marketplace(code: str) -> Marketplaces:
-    """'DE' -> Marketplaces.DE, Fallback: DE."""
-    return _MARKETPLACE_MAP.get(code.upper(), Marketplaces.DE)
+# Waehrung je Marktplatz (Nicht-EUR -> FX noetig vor EUR-Margenrechnung).
+_MARKETPLACE_CURRENCY: dict[str, str] = {
+    'DE': 'EUR', 'FR': 'EUR', 'IT': 'EUR', 'ES': 'EUR', 'NL': 'EUR', 'BE': 'EUR',
+    'UK': 'GBP', 'SE': 'SEK', 'PL': 'PLN',
+}
 
 
-def get_marketplace_id(code: str) -> str:
-    """'DE' -> 'A1PA6795UKMFR9', Fallback: DE."""
-    return _MARKETPLACE_IDS.get(code.upper(), _MARKETPLACE_IDS['DE'])
+def _norm_code(code) -> str | None:
+    """Marktplatz-Code normalisieren. Enum -> Name, leer/None -> None."""
+    if isinstance(code, Marketplaces):
+        return code.name
+    if not code:
+        return None
+    return str(code).upper()
+
+
+def get_marketplace(code: str | Marketplaces = 'DE') -> Marketplaces:
+    """'DE'/Marketplaces.DE -> Marketplaces.DE. Leer/None -> DE (Default).
+
+    Unbekannter Code -> ValueError (kein stiller DE-Fallback mehr, der sonst
+    Auslandsabfragen unbemerkt als DE-Preise zurueckgeben wuerde).
+    """
+    if isinstance(code, Marketplaces):
+        return code
+    key = _norm_code(code)
+    if key is None:
+        return Marketplaces.DE
+    mk = _MARKETPLACE_MAP.get(key)
+    if mk is None:
+        raise ValueError(
+            f"Unbekannter Marketplace-Code {code!r}; bekannt: {sorted(_MARKETPLACE_MAP)}")
+    return mk
+
+
+def get_marketplace_id(code: str | Marketplaces = 'DE') -> str:
+    """'DE' -> 'A1PA6795UKMFR9'. Leer/None -> DE. Unbekannt -> ValueError."""
+    key = _norm_code(code)
+    if key is None:
+        return _MARKETPLACE_IDS['DE']
+    mid = _MARKETPLACE_IDS.get(key)
+    if mid is None:
+        raise ValueError(
+            f"Unbekannter Marketplace-Code {code!r}; bekannt: {sorted(_MARKETPLACE_IDS)}")
+    return mid
+
+
+def get_vat(code: str | Marketplaces = 'DE') -> float:
+    """Standard-USt-Satz des Zielmarkts (z.B. 'NL' -> 0.21). Unbekannt -> ValueError."""
+    key = _norm_code(code) or 'DE'
+    vat = _MARKETPLACE_VAT.get(key)
+    if vat is None:
+        raise ValueError(f"Kein USt-Satz fuer {code!r} hinterlegt")
+    return vat
+
+
+def get_currency(code: str | Marketplaces = 'DE') -> str:
+    """Waehrungscode des Marktplatzes (z.B. 'PL' -> 'PLN'). Unbekannt -> ValueError."""
+    key = _norm_code(code) or 'DE'
+    cur = _MARKETPLACE_CURRENCY.get(key)
+    if cur is None:
+        raise ValueError(f"Keine Waehrung fuer {code!r} hinterlegt")
+    return cur
+
+
+def is_eur_market(code: str | Marketplaces = 'DE') -> bool:
+    """True, wenn der Marktplatz in EUR handelt (sonst FX noetig)."""
+    return get_currency(code) == 'EUR'
 
 
 def get_amazon_seller_id(code: str) -> str:
