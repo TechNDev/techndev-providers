@@ -1,0 +1,12 @@
+#!/bin/sh
+# TechNDev Encoding-Guard (pre-commit)
+# Lehnt Commits mit UTF-8-BOM, ungueltigem UTF-8 oder Doppel-Encoding (Mojibake)
+# ab. Logik: .githooks/check_encoding.py. Aktivierung pro Klon (einmalig):
+#     git config core.hooksPath .githooks
+PY=$(command -v python 2>/dev/null || command -v python3 2>/dev/null || command -v py 2>/dev/null)
+if [ -z "$PY" ]; then
+    echo "encoding-guard: kein Python gefunden -- Pruefung uebersprungen" >&2
+    exit 0
+fi
+ROOT=$(git rev-parse --show-toplevel)
+exec "$PY" "$ROOT/.githooks/check_encoding.py"

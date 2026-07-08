@@ -1,0 +1,3 @@
+# Hook-Dateien immer mit LF auschecken -- ein CRLF-Shebang wuerde /bin/sh brechen.
+pre-commit        text eol=lf
+check_encoding.py text eol=lf
