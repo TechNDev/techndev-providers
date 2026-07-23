@@ -348,6 +348,10 @@ def evaluate_arbitrage(
             fba_fee_netto    = None
             estimated_payout = None
             referral_pct     = get_referral_pct(category)
+            # Immer initialisieren: wird nur im buy_box-Zweig gesetzt, aber unten
+            # (Fee-Aufschluesselung) unbedingt gelesen. Fehlt der Buy-Box-Preis
+            # (z.B. SP-API ServerError -> buy_box None), sonst UnboundLocalError.
+            breakdown        = None
 
             # Herkunft des Preises kennzeichnen (fuer die Anzeige).
             if offers.buy_box_price is not None:
@@ -438,6 +442,7 @@ def evaluate_arbitrage(
                     'vk_brutto':         buy_box,
                     'fba_fee_netto':     fba_fee_netto if fba_fee_netto is not None else 0.0,
                     'referral_pct':      referral_pct,
+                    'weight_kg':         res.weight_kg,   # fuer lokalen Fee-Fallback (Fix 1)
                     'dst_pct':           dst_pct,   # W10: DigitalServicesFee-Kalibrierung
                     'bsr':               bsr,
                     'category':          category,
