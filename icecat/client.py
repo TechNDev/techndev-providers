@@ -7,6 +7,9 @@ Extrahiert aus EAN2JTL (ean2jtl.py v3.15.0).
 
 API:  https://live.icecat.biz/api
 Auth: api-token + content-token als HTTP-Header
+      app_key (optional) als Query-Param — noetig fuer FULL-Icecat-Inhalte
+      (Elektronik u.a.). Ohne app_key liefert die API nur Open-Icecat-Produkte;
+      Full-Content-Produkte antworten sonst mit HTTP 403.
 
 Rueckgabe-Format (parse_product) ist identisch zu EAN2JTL:
   ean, icecat_id, name, brand, mpn, category,
@@ -14,6 +17,9 @@ Rueckgabe-Format (parse_product) ist identisch zu EAN2JTL:
 
 CHANGELOG
 ---------
+v1.1.0  (2026-07-25)
+  - app_key (optional): Query-Param fuer Full-Icecat-Zugriff. Rueckwaertskompatibel
+    (ohne app_key unveraendertes Verhalten = nur Open-Icecat).
 v1.0.0  (2026-05-25)
   - Initiales Release, extrahiert aus EAN2JTL
   - Bilddeduplication: seen_urls-Set statt _img_base_id()
@@ -26,7 +32,7 @@ import re
 
 import requests
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 class IcecatClient:
@@ -51,9 +57,11 @@ class IcecatClient:
         api_token:     str,
         content_token: str,
         language:      str = "DE",
+        app_key:       str | None = None,
     ):
         self.shopname = shopname
         self.language = language
+        self.app_key  = app_key or None      # noetig fuer Full-Icecat-Inhalte
         self.session  = requests.Session()
         self.session.headers.update({
             "User-Agent":    "TechNDevIcecatClient/1.0",
@@ -61,6 +69,14 @@ class IcecatClient:
             "api-token":     api_token,
             "content-token": content_token,
         })
+
+    def _params(self, **extra) -> dict:
+        """Basis-Query-Params inkl. app_key (falls gesetzt)."""
+        p = {"shopname": self.shopname, "lang": self.language, "content": ""}
+        if self.app_key:
+            p["app_key"] = self.app_key
+        p.update(extra)
+        return p
 
     # ── Verbindungstest ────────────────────────────────────────────────────────
 
@@ -72,18 +88,16 @@ class IcecatClient:
         TEST_EAN = "0711719709695"
         try:
             resp = self.session.get(
-                self.BASE_URL,
-                params={"shopname": self.shopname, "lang": "DE",
-                        "GTIN": TEST_EAN, "content": ""},
-                timeout=self.TIMEOUT,
-            )
+                self.BASE_URL, params=self._params(GTIN=TEST_EAN), timeout=self.TIMEOUT)
             if resp.status_code == 200:
                 name = ((resp.json().get("data") or {})
                         .get("GeneralInfo", {}).get("Title", "–"))
                 return True, f"Zugang OK  ·  Testprodukt: {name}"
             elif resp.status_code == 401:
                 return False, "HTTP 401 – Zugangsdaten ungueltig"
-            elif resp.status_code == 404:
+            elif resp.status_code in (400, 403, 404):
+                # 400 GTIN-nicht-gefunden / 403 Full-Content ohne app_key / 404 Marken-
+                # Restriktion → API grundsaetzlich erreichbar, Auth ok.
                 return True, "Zugang OK  ·  API erreichbar"
             else:
                 return False, f"HTTP {resp.status_code}"
@@ -97,11 +111,7 @@ class IcecatClient:
     def fetch_by_ean(self, ean: str) -> dict:
         """EAN-Suche. Raises requests.HTTPError."""
         resp = self.session.get(
-            self.BASE_URL,
-            params={"shopname": self.shopname, "lang": self.language,
-                    "GTIN": ean.strip(), "content": ""},
-            timeout=self.TIMEOUT,
-        )
+            self.BASE_URL, params=self._params(GTIN=ean.strip()), timeout=self.TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
@@ -109,22 +119,16 @@ class IcecatClient:
         """Lookup via Hersteller + Artikelnummer. Raises HTTPError."""
         resp = self.session.get(
             self.BASE_URL,
-            params={"shopname": self.shopname, "lang": self.language,
-                    "Brand": brand.strip(), "ProductCode": mpn.strip(),
-                    "content": ""},
-            timeout=self.TIMEOUT,
-        )
+            params=self._params(Brand=brand.strip(), ProductCode=mpn.strip()),
+            timeout=self.TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
     def fetch_by_icecat_id(self, icecat_id: str) -> dict:
         """Lookup via interne Icecat-ID. Raises HTTPError."""
         resp = self.session.get(
-            self.BASE_URL,
-            params={"shopname": self.shopname, "lang": self.language,
-                    "icecat_id": icecat_id.strip(), "content": ""},
-            timeout=self.TIMEOUT,
-        )
+            self.BASE_URL, params=self._params(icecat_id=icecat_id.strip()),
+            timeout=self.TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
