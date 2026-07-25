@@ -66,3 +66,6 @@ def _retry(func):
 browse_limiter    = RateLimiter(min_interval_s=1.0)   # Browse API (aktive Listings)
 scraper_limiter   = RateLimiter(min_interval_s=2.0)   # HTML-Scraper (sold)
 analytics_limiter = RateLimiter(min_interval_s=0.5)   # Sell Analytics API
+catalog_limiter   = RateLimiter(min_interval_s=0.5)   # Commerce Catalog API
+taxonomy_limiter  = RateLimiter(min_interval_s=0.5)   # Taxonomy API (Kategorie/Aspects)
+inventory_limiter = RateLimiter(min_interval_s=0.3)   # Sell Inventory API (Schreib-Pfad)

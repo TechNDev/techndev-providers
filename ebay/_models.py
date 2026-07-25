@@ -6,6 +6,15 @@ Datenklassen fuer den eBay-Provider.
 
 CHANGELOG
 ---------
+v2.2.0  (2026-07-25)
+  - CatalogProduct:    Ergebnis der Commerce-Catalog-Suche (epid, title, aspects,
+                       gtins, Bilder, brand). source='catalog'|'browse' (Fallback).
+  - AspectRequirement: Pflicht/Empfohlen-Item-Specific aus Taxonomy API
+                       (name, required, cardinality, mode, erlaubte Werte).
+  - EbayOfferDraft:    fertiges, validierbares Angebot — gemeinsames Eingabemodell
+                       fuer beide Ausgabe-Adapter (JTL-CSV + eBay Inventory API).
+  - Basis fuer den eBay-Listing-Erzeugungs-Workflow (ebay-poster).
+
 v2.1.0  (2026-07-06)
   - _robust_trim(): iteratives Ausreisser-Trimmen (Median-Band [0.5x, 2x]).
     Kernbaustein gegen instabile/verunreinigte median_sold-Werte — entfernt
@@ -30,7 +39,136 @@ from datetime import datetime
 from statistics import mean, median
 from typing import Optional
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Katalog + Taxonomie — Bausteine fuer die Listing-Erzeugung
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class CatalogProduct:
+    """
+    Produkt aus dem eBay-Katalog (Commerce Catalog API) — die "Struktur", von der
+    ein neues Angebot kopiert wird: Titel, Marke, Item-Specifics (aspects), Bilder.
+
+    aspects: {Name: [Wert, ...]} — von eBay normalisierte Produkt-Attribute.
+    source:  'catalog' (Commerce Catalog API) | 'browse' (Fallback ueber ein
+             bestehendes Live-Angebot via Browse getItem, wenn Catalog gesperrt ist).
+    category_id: eBay-Kategorie, falls schon bekannt (Browse-Fallback liefert sie mit;
+             ueber Catalog i.d.R. leer → per Taxonomy get_category_suggestions ermitteln).
+    """
+    query:             str  = ''
+    marketplace:       str  = 'EBAY_DE'
+    fetched_at:        str  = ''
+
+    epid:              Optional[str]     = None
+    title:             str               = ''
+    brand:             Optional[str]     = None
+    gtins:             list[str]         = field(default_factory=list)
+    image_url:         Optional[str]     = None
+    additional_images: list[str]         = field(default_factory=list)
+    aspects:           dict              = field(default_factory=dict)  # {name: [values]}
+    description:       Optional[str]     = None
+    category_id:       Optional[str]     = None
+
+    source:            str               = 'catalog'
+    error:             Optional[str]     = None
+
+    def ok(self) -> bool:
+        return self.error is None and bool(self.title)
+
+    def all_images(self) -> list[str]:
+        """Hauptbild + Zusatzbilder, dedupliziert, Reihenfolge erhalten."""
+        seen: set[str] = set()
+        out:  list[str] = []
+        for u in [self.image_url, *self.additional_images]:
+            if u and u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class AspectRequirement:
+    """
+    Ein Item-Specific laut Taxonomy API (getItemAspectsForCategory) fuer eine
+    Leaf-Kategorie. Steuert, welche Felder ein Angebot in dieser Kategorie braucht.
+
+    required:    True = Pflichtfeld (Angebot wird sonst von eBay abgelehnt).
+    cardinality: 'SINGLE' | 'MULTI' (ein bzw. mehrere Werte erlaubt).
+    mode:        'FREE_TEXT' | 'SELECTION_ONLY' (nur Werte aus `values` erlaubt).
+    values:      erlaubte/empfohlene Werte (leer bei reinem Freitext).
+    """
+    name:        str
+    required:    bool      = False
+    cardinality: str       = 'SINGLE'
+    mode:        str       = 'FREE_TEXT'
+    values:      list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class EbayOfferDraft:
+    """
+    Ein fertig zusammengesetztes eBay-Angebot vor der Veroeffentlichung.
+    Gemeinsames Eingabemodell fuer beide Ausgabe-Adapter:
+      - JTL-Ameise-CSV (export_jtl)      → eazyAuction stellt ein
+      - eBay Inventory API (publish_ebay) → createInventoryItem/createOffer/publishOffer
+
+    condition: eBay conditionEnum (z.B. 'NEW', 'USED_EXCELLENT').
+    aspects:   {Name: [Wert, ...]} — befuellte Item-Specifics.
+    required_missing: Pflicht-Aspects (laut Taxonomy), die NICHT befuellt werden konnten
+                      → Angebot ist nicht veroeffentlichungsreif (ready() == False).
+    """
+    sku:          str            = ''
+    ean:          Optional[str]  = None
+    title:        str            = ''
+    subtitle:     Optional[str]  = None
+    brand:        Optional[str]  = None
+    mpn:          Optional[str]  = None
+    epid:         Optional[str]  = None
+
+    category_id:  Optional[str]  = None
+    marketplace:  str            = 'EBAY_DE'
+    condition:    str            = 'NEW'
+
+    price:        Optional[float] = None
+    currency:     str            = 'EUR'
+    quantity:     int            = 1
+
+    description:  str            = ''             # HTML erlaubt
+    images:       list[str]      = field(default_factory=list)
+    aspects:      dict           = field(default_factory=dict)   # {name: [values]}
+
+    # Versandpaket (Inventory API packageWeightAndSize; CSV Gewicht/Masse)
+    weight_kg:    Optional[float] = None
+    length_cm:    Optional[float] = None
+    width_cm:     Optional[float] = None
+    height_cm:    Optional[float] = None
+
+    # Diagnose
+    required_missing: list[str]  = field(default_factory=list)
+    warnings:         list[str]  = field(default_factory=list)
+    source_note:      str        = ''            # Herkunft (catalog/browse + Anreicherung)
+
+    def ready(self) -> bool:
+        """True wenn das Angebot ohne manuelle Nacharbeit veroeffentlicht werden kann."""
+        return (
+            not self.required_missing
+            and bool(self.title)
+            and self.price is not None
+            and bool(self.category_id)
+            and bool(self.images)
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

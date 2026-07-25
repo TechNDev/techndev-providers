@@ -88,6 +88,7 @@ def search_active(
     limit:            int = 50,
     new_only:         bool = True,
     fixed_price_only: bool = True,
+    as_text:          bool = False,
 ) -> tuple[int | None, list[ActiveItem], str | None]:
     """
     Sucht nach aktiven eBay-Angeboten via Browse API item_summary/search.
@@ -98,6 +99,9 @@ def search_active(
     limit:        Max. Ergebnisse (1-200).
     new_only:     Nur Zustand Neu (conditionId 1000).
     fixed_price_only: Nur Sofort-Kaufen (FIXED_PRICE).
+    as_text:      Query immer als Freitext (q) senden, auch bei numerischer EAN.
+                  Der gtin-Parameter matcht auf EBAY_DE oft nicht (0 Treffer),
+                  waehrend die EAN als Freitext zuverlaessig greift.
 
     Rueckgabe: (total, items, error_or_None)
     """
@@ -129,7 +133,7 @@ def search_active(
     }
     if filter_str:
         params["filter"] = filter_str
-    if is_gtin(query):
+    if is_gtin(query) and not as_text:
         params["gtin"] = query
     else:
         params["q"] = query

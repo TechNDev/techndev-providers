@@ -7,6 +7,13 @@ Thread-safe Token-Cache pro (client_id, scope)-Paar.
 
 CHANGELOG
 ---------
+v1.2.0  (2026-07-25)
+  - SCOPE_CATALOG:   commerce.catalog.readonly fuer Commerce Catalog API
+                     (Produktsuche per GTIN → ProductSummary, App-Token).
+  - SCOPE_TAXONOMY:  api_scope (Basic) genuegt fuer Taxonomy API — Alias fuer Klarheit.
+  - SCOPE_INVENTORY: sell.inventory fuer Sell Inventory API (Schreib-Pfad, User-Token).
+  - SCOPE_ACCOUNT:   sell.account.readonly fuer Business-Policies/Location (User-Token).
+
 v1.1.0  (2026-05-28)
   - SCOPE_ANALYTICS: sell.analytics.readonly fuer Sell Analytics API.
   - get_user_token(): User Token per Refresh-Token-Grant (Authorization Code Flow).
@@ -28,12 +35,19 @@ from threading import Lock
 
 import requests
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # ── Scopes ────────────────────────────────────────────────────────────────────
 SCOPE_BASIC      = "https://api.ebay.com/oauth/api_scope"
 SCOPE_SOLD       = "https://api.ebay.com/oauth/api_scope/buy.marketplace.insights"
 SCOPE_ANALYTICS  = "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly"
+# Taxonomy API kommt mit dem Basic-Scope aus (Kategorie-Baum + Item-Aspects).
+SCOPE_TAXONOMY   = SCOPE_BASIC
+# Commerce Catalog API: fuer Buying-Apps genuegt commerce.catalog.readonly (App-Token).
+SCOPE_CATALOG    = "https://api.ebay.com/oauth/api_scope/commerce.catalog.readonly"
+# Sell Inventory API (Schreib-Pfad) + Account (Policies/Location) — beide User-Token.
+SCOPE_INVENTORY  = "https://api.ebay.com/oauth/api_scope/sell.inventory"
+SCOPE_ACCOUNT    = "https://api.ebay.com/oauth/api_scope/sell.account.readonly"
 
 # ── Token-Cache ───────────────────────────────────────────────────────────────
 # key: (client_id, scope)  →  value: (access_token, expires_at: float monotonic)

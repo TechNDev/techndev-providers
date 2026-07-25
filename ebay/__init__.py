@@ -1,8 +1,9 @@
 """
-techndev-providers  ebay  v2.0.0
+techndev-providers  ebay  v2.2.0
 ==================================
 eBay Datenprovider fuer TechNDev Tools.
-Gemeinsame Bibliothek fuer amz-einkauf, mydealz-watcher, reseller-profitability.
+Gemeinsame Bibliothek fuer amz-einkauf, mydealz-watcher, reseller-profitability,
+jtl-bestandsabgleich, ebay-poster.
 
 Oeffentliche API
 ----------------
@@ -13,6 +14,13 @@ Oeffentliche API
   from ebay import SoldResult, ActiveResult, MarketSnapshot  # Haupt-Datenmodelle
   from ebay import SoldItem, ActiveItem                      # Einzel-Angebote
   from ebay import TrafficReport, SellerStandards            # Analytics-Modelle
+
+  # Listing-Erzeugung (v2.2.0):
+  from ebay import lookup_product                            # EAN/Name → CatalogProduct
+  from ebay import suggest_category_id, get_item_aspects     # Kategorie + Pflichtfelder
+  from ebay import build_inventory_item, build_offer_payload # EbayOfferDraft → API-Bodies
+  from ebay import create_offer, publish_offer               # Schreib-Pfad (User-Token)
+  from ebay import CatalogProduct, AspectRequirement, EbayOfferDraft
 
 Import-Pattern (Git-Submodul unter providers/)
 ----------------------------------------------
@@ -75,15 +83,30 @@ Hinweis Sold-Daten
 from ._models   import (
     SoldItem, ActiveItem,
     SoldResult, ActiveResult, MarketSnapshot,
+    CatalogProduct, AspectRequirement, EbayOfferDraft,
     now_iso, _price_stats, _calc_str,
 )
 from ._auth     import (
     get_token, get_user_token, make_oauth_url,
     SCOPE_BASIC, SCOPE_SOLD, SCOPE_ANALYTICS,
+    SCOPE_TAXONOMY, SCOPE_CATALOG, SCOPE_INVENTORY, SCOPE_ACCOUNT,
 )
 from .sold      import get_sold_listings, search_sold
 from .browse    import get_active_listings, search_active, get_item_gtin, get_item
 from .scraper   import scrape_sold
+from .catalog   import (
+    lookup_product, search_catalog_by_gtin, search_catalog, get_catalog_product,
+)
+from .taxonomy  import (
+    get_category_suggestions, suggest_category_id, get_item_aspects,
+    get_default_category_tree_id,
+)
+from .inventory import (
+    build_inventory_item, build_offer_payload,
+    create_or_replace_inventory_item, create_offer, publish_offer,
+    withdraw_offer, delete_offer, delete_inventory_item,
+    get_business_policies, get_inventory_locations,
+)
 from .analytics import (
     get_traffic_report  as get_seller_analytics,
     get_seller_standards,
@@ -91,7 +114,7 @@ from .analytics import (
     ALL_METRICS, DEFAULT_METRICS,
 )
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 __all__ = [
     # ── Hauptfunktionen (analog amazon_sp) ───────────────────────────────────
@@ -100,6 +123,26 @@ __all__ = [
     'get_item_gtin',              # itemId → GTIN/EAN (Browse getItem)
     'get_item',                   # itemId → {title,price,gtin,condition,url,...}
     'get_market_snapshot',        # EAN/Query → MarketSnapshot (sold + active)
+    # ── Katalog + Taxonomie (Listing-Struktur) ───────────────────────────────
+    'lookup_product',             # EAN/Query → CatalogProduct (Catalog→Browse-Fallback)
+    'search_catalog_by_gtin',     # GTIN → CatalogProduct (Commerce Catalog)
+    'search_catalog',             # Query → (productSummaries, error)
+    'get_catalog_product',        # epid → CatalogProduct (getProduct)
+    'get_category_suggestions',   # Titel → [{category_id, category_name, ancestors}]
+    'suggest_category_id',        # Titel → beste Leaf-categoryId
+    'get_item_aspects',           # categoryId → [AspectRequirement]
+    'get_default_category_tree_id',
+    # ── Inventory API (Schreib-Pfad, User-Token sell.inventory) ──────────────
+    'build_inventory_item',       # EbayOfferDraft → InventoryItem-Body (rein)
+    'build_offer_payload',        # EbayOfferDraft → Offer-Body (rein)
+    'create_or_replace_inventory_item',
+    'create_offer',               # Offer-Body → offerId
+    'publish_offer',              # offerId → listingId
+    'withdraw_offer',             # offerId → Listing beenden
+    'delete_offer',               # offerId → Offer-Entwurf loeschen
+    'delete_inventory_item',      # sku → Inventory-Eintrag loeschen
+    'get_business_policies',      # → {fulfillment,payment,return}
+    'get_inventory_locations',    # → [locations]
     # ── Analytics (User-Token erforderlich) ──────────────────────────────────
     'get_seller_analytics',       # Traffic-Report → TrafficReport
     'get_seller_standards',       # Performance-Level → SellerStandards
@@ -109,6 +152,9 @@ __all__ = [
     'MarketSnapshot',
     'SoldItem',
     'ActiveItem',
+    'CatalogProduct',
+    'AspectRequirement',
+    'EbayOfferDraft',
     'TrafficReport',
     'TrafficRow',
     'SellerStandards',
@@ -122,6 +168,10 @@ __all__ = [
     'SCOPE_BASIC',
     'SCOPE_SOLD',
     'SCOPE_ANALYTICS',
+    'SCOPE_TAXONOMY',
+    'SCOPE_CATALOG',
+    'SCOPE_INVENTORY',
+    'SCOPE_ACCOUNT',
     # ── Legacy (abwaertskompatibel) ───────────────────────────────────────────
     'search_sold',
     'search_active',
