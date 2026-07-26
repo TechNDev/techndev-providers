@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-techndev-providers  brickmerge/scraper.py  v1.1.0
+techndev-providers  brickmerge/scraper.py  v1.3.0
 ===================================================
 Live-Scraper fuer brickmerge.de — Preise, Stammdaten + Produktdetails.
 
@@ -11,6 +11,23 @@ Scraping-Strategie:
 
 CHANGELOG
 ---------
+v1.3.0  (2026-07-27)
+  - FIX weight_part_g/weight_set_g lieferten IMMER None, piece_count ab 1.000
+    Teilen ebenfalls. Zwei Ursachen, beide still (kein Fehler, nur leere Felder):
+      1. Naeherungszeichen kommt als HTML-Entitaet: "<strong>&asymp;494g</strong>".
+         resp.read().decode('utf-8') dekodiert nur das Encoding, NICHT Entitaeten —
+         die Annahme im alten Kommentar ("bereits auf UTF-8 dekodiert") war falsch,
+         das Pattern [≈~]? konnte nie greifen.
+      2. Tausenderpunkt: "≈7.750g" / "Teile: <strong>9.090</strong>" — das reine
+         Ziffern-Pattern bricht am Punkt ab. Bei Massen ist der Punkt dagegen
+         DEZIMALtrenner ("19.1 x 26.2 cm"), deshalb wird nur beim Integer-Pfad
+         entpunktet.
+    Neu: _APPROX (Entitaet ODER Zeichen), _GRAMS_IN_STRONG, Ziffern-Pattern mit
+    Punkt in _INT_IN_STRONG + Separator-Strip in _extract_int().
+    Wirkung: weight_set_g (Gewicht INKL. Verpackung) ist das Versandgewicht —
+    LEGO braucht dafuer weder SP-API noch den 1,73-Schaetzfaktor. Betrifft
+    mydealz-watcher._ebay_shipping_cost, das bis hierher still auf den
+    6-EUR-Default zurueckfiel.
 v1.2.0  (2026-05-26)
   - minifig_count, minifig_exclusive_count: RE_MINIFIGS_TOTAL + RE_MINIFIGS_EXCL.
     Exklusiver Count wird in einem 300-Zeichen-Fenster nach dem Total-Match gesucht.
@@ -38,7 +55,7 @@ from urllib.request import Request, urlopen
 
 from ._models import MarketPrices, now_iso
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Konstanten
@@ -85,10 +102,20 @@ RE_SELLER_COUNT = re.compile(
 
 # ── Produkt-Stammdaten-Pattern ────────────────────────────────────────────────
 # Alle Pattern erwarten server-gerendertes HTML mit <strong>...</strong>.
-# HTML-Entitaeten sind bereits auf UTF-8 dekodiert (resp.read().decode('utf-8')).
+# ACHTUNG: _fetch() dekodiert nur das Encoding (UTF-8), NICHT die HTML-Entitaeten.
+# Entitaeten wie &asymp; / &nbsp; / &euro; stehen also literal im String — Pattern
+# muessen sie erwarten (s. _APPROX, _PRICE_AFTER).
+#
+# Zahlen: Brickmerge trennt Tausender mit PUNKT ("9.090 Teile", "≈7.750g"), bei
+# Massen ist derselbe Punkt aber DEZIMALtrenner ("19.1 x 26.2 x 6.1 cm").
+# Deshalb: Integer-Pattern fangen [\d.]+ ein, _extract_int() entfernt den Punkt;
+# _extract_box_dims() laesst ihn stehen.
 
-_INT_IN_STRONG   = r"<strong>\s*(\d+)\s*</strong>"
+_INT_IN_STRONG   = r"<strong>\s*([\d.]+)\s*</strong>"
 _FLOAT_IN_STRONG = r"<strong>\s*([\d.]+)\s*</strong>"
+
+# Naeherungszeichen vor Gewichtsangaben — als Entitaet ODER als Zeichen.
+_APPROX = r"(?:&asymp;|&#8776;|&#x2248;|[≈~])?"
 
 # Teileanzahl: "Teile: <strong>326</strong>"
 RE_PIECE_COUNT = re.compile(r"Teile:\s*" + _INT_IN_STRONG, re.IGNORECASE)
@@ -96,16 +123,13 @@ RE_PIECE_COUNT = re.compile(r"Teile:\s*" + _INT_IN_STRONG, re.IGNORECASE)
 # Alter: "Alter: <strong>8+</strong>"  oder  "Alter <strong>8</strong>+"
 RE_AGE_MIN = re.compile(r"Alter[:\s]+<strong>\s*(\d+)\+?\s*</strong>", re.IGNORECASE)
 
-# Gewicht: "Teilegewicht: <strong>≈228 g</strong>"
-# ≈ ist U+2248 oder &asymp;, beide nach UTF-8-Decode als Literal vorhanden
-RE_WEIGHT_PARTS = re.compile(
-    r"Teilegewicht[:\s]+<strong>\s*[≈~]?\s*(\d+)\s*g\s*</strong>",
-    re.IGNORECASE,
-)
-RE_WEIGHT_SET = re.compile(
-    r"Setgewicht[:\s]+<strong>\s*[≈~]?\s*(\d+)\s*g\s*</strong>",
-    re.IGNORECASE,
-)
+# Gewicht: "Teilegewicht: <strong>&asymp;228g</strong>" (ohne Verpackung)
+#          "Setgewicht:   <strong>&asymp;7.750g</strong>" (MIT Verpackung = Versandgewicht)
+# Entitaet + Tausenderpunkt, s. Kopfkommentar. Leerzeichen vor 'g' ist optional.
+_GRAMS_IN_STRONG = r"<strong>\s*" + _APPROX + r"\s*([\d.]+)\s*g\s*</strong>"
+
+RE_WEIGHT_PARTS = re.compile(r"Teilegewicht[:\s]+" + _GRAMS_IN_STRONG, re.IGNORECASE)
+RE_WEIGHT_SET   = re.compile(r"Setgewicht[:\s]+"   + _GRAMS_IN_STRONG, re.IGNORECASE)
 
 # OVP-Maße: "OVP-Maße: <strong>19.1 x 26.2 x 6.1 cm</strong>"
 # Dezimaltrennzeichen ist Punkt (nicht Komma) bei Abmessungen auf brickmerge
@@ -207,13 +231,20 @@ def _extract_seller_count(html: str) -> int | None:
 
 
 def _extract_int(pattern: re.Pattern, html: str) -> int | None:
-    """Extrahiert erste Capture-Group aus pattern als int, oder None."""
+    """
+    Extrahiert erste Capture-Group aus pattern als int, oder None.
+
+    Entfernt vorher den Tausenderpunkt/-komma ("9.090" -> 9090). Alle Felder, die
+    hierueber laufen, sind ganzzahlig (Teile, Gramm, Alter, VE, PLC-Monate) — ein
+    Punkt kann dort nur Tausendertrenner sein. Masse gehen NICHT hier durch
+    (s. _extract_box_dims), dort ist der Punkt Dezimaltrenner.
+    """
     m = pattern.search(html)
     if not m:
         return None
     try:
-        return int(m.group(1))
-    except (TypeError, ValueError):
+        return int(m.group(1).replace(".", "").replace(",", "").strip())
+    except (TypeError, ValueError, AttributeError):
         return None
 
 

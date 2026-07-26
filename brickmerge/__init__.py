@@ -1,5 +1,5 @@
 """
-techndev-providers  brickmerge  v1.2.0
+techndev-providers  brickmerge  v1.3.0
 ========================================
 Brickmerge.de Datenprovider fuer LEGO-Set-Daten.
 
@@ -26,4 +26,4 @@ __all__ = [
     "BrickmergeProvider",
     "BrickmergeCache",
 ]
-__version__ = "1.2.0"
+__version__ = "1.3.0"
