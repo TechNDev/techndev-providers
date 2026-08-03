@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipelines.arbitrage  v0.11.0
+pipelines.arbitrage  v0.12.0
 ============================
 Gemeinsamer Arbitrage-Flow: EAN/ASIN + Einkaufspreis → Amazon-Angebot (SP-API) +
 eBay-Markt → Profitabilitaet je Plattform (reseller_profitability).
@@ -32,6 +32,16 @@ Import-Pattern (Consumer mit Git-Submodul providers/ + profitability/):
 
 CHANGELOG
 ---------
+v0.12.0  (2026-08-03)
+  - eBay-Fehler werden je Seite gemeldet. Bisher haing die Fehlermeldung an
+    snap.ok(), und das ist True, sobald EINE Seite klappt. Seit dem eBay-Login-
+    Gate (2026-07-23) scheitert nur die Sold-Seite, die Aktiv-Seite (Browse-API)
+    laeuft weiter -> snap.ok() blieb True -> der Sold-Ausfall tauchte in KEINER
+    Fehlerliste auf, waehrend ebay_snapshot mit median_sold=None geschrieben wurde.
+    Jetzt: sold.error und active.error einzeln nach res.errors, und beide zusaetzlich
+    als 'sold_error'/'active_error' im ebay_snapshot, damit der Consumer gute
+    Werte nicht mit NULL ueberschreibt.
+
 v0.11.0  (2026-07-06)
   - eBay-Marktpreis nur noch aus VERKAUFTEN Angeboten (sold.best_price). Der
     bisherige Fallback auf active.best_price (Median aktiver Angebots-/Wunschpreise)
@@ -145,7 +155,7 @@ try:
 except Exception:                                                            # noqa: BLE001
     _calc_shipping = None
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 
 def _ebay_shipping_for(res, fallback: float) -> float:
@@ -493,11 +503,21 @@ def evaluate_arbitrage(
                     'active_total':      active.total,
                     'active_median':     active.median_price,   # nur Referenz, NICHT Marge
                     'sell_through_rate': snap.sell_through_rate,
+                    # Fehler der Sold-Seite mitfuehren: der Verbraucher (product-
+                    # catalog) muss "keine Verkaeufe" von "nicht abrufbar"
+                    # unterscheiden koennen, sonst ueberschreibt er gute Werte
+                    # mit NULL und zeigt danach alte Margen als aktuell an.
+                    'sold_error':        sold.error,
+                    'active_error':      active.error,
                 }
-                if not snap.ok():
-                    res.errors.append(
-                        f"ebay: sold={sold.error or '-'} active={active.error or '-'}"
-                    )
+                # snap.ok() ist True, sobald EINE Seite klappt. Die Aktiv-Seite
+                # (Browse-API) laeuft weiter, waehrend der Sold-Scraper seit dem
+                # eBay-Login-Gate hart scheitert — an snap.ok() aufgehaengt blieb
+                # dieser Ausfall komplett unsichtbar. Beide Seiten einzeln melden.
+                if sold.error:
+                    res.errors.append(f"ebay sold: {sold.error}")
+                if active.error:
+                    res.errors.append(f"ebay active: {active.error}")
 
                 if ebay_price is not None:
                     # Versand gewichts-/massbasiert (SP-API-Masse), sonst Pauschale.

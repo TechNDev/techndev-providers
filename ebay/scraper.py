@@ -18,6 +18,24 @@ Nur fuer eigene Recherche / nicht-kommerziellen Eigengebrauch.
 
 CHANGELOG
 ---------
+v1.5.0  (2026-08-03)
+  - LOGIN-GATE: eBay leitet /sch/i.html?LH_Sold=1 (auch LH_Complete=1 allein) seit
+    ~2026-07-23 per 302 auf signin.ebay.de um — Sold-Listings sind anonym nicht
+    mehr abrufbar (.de UND .com; Aktiv-Suche unveraendert offen). Der Scraper
+    meldete das NICHT: die Signin-Seite ist ~120 KB und kam mit HTTP 200, also
+    griff weder _is_challenge (< 100 KB) noch raise_for_status — Ergebnis war
+    (None, [], None), d.h. "erfolgreich 0 Verkaeufe". Genau so entstanden ab
+    2026-07-23 leere ebay_market-Zeilen ohne Fehlermeldung.
+    Fixes:
+    1. _gate_reason(): erkennt Login-Redirect (signin.ebay.*/eBayISAPI.dll?SignIn)
+       ueber resp.history UND finale URL, Captcha-Splash (splashui, groessen-
+       unabhaengig) und Challenge-Marker.
+    2. Struktur-Check: eine Antwort ohne Ergebnis-Container (srp-results/s-card/
+       totalItems) ist KEINE Trefferseite -> Fehler statt stiller Leermenge.
+       Damit ist "0 Verkaeufe" nur noch echt, wenn eine echte SRP-Seite kam.
+    3. scrape_sold gibt bei Gate immer error != None zurueck — nie mehr
+       (None, [], None). Aufrufer koennen fehlend von leer unterscheiden.
+
 v1.4.0  (2026-07-06)
   - REPRODUZIERBARKEIT: median_sold schwankte zwischen Laeufen massiv trotz
     stabilem sold_count. Ursache: (a) Best-Match liefert je Abruf eine ~40%
@@ -63,7 +81,7 @@ import requests
 
 from ._models import SoldItem
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 TIMEOUT = 30
 
@@ -123,18 +141,64 @@ def _get_session(domain: str) -> requests.Session:
     return _sessions[domain]
 
 
-# ── Challenge-Erkennung ───────────────────────────────────────────────────────
-# Akamai Bot Manager serviert bei verdaechtigen Sessions eine ~13KB-Seite mit
-# dem Titel "Bitte entschuldigen Sie die Störung" statt der eigentlichen Seite.
+# ── Gate-Erkennung (Login / Captcha / Challenge / Nicht-Trefferseite) ─────────
+# Drei Arten, wie eBay statt der Trefferseite etwas anderes liefert:
+#   1. LOGIN   — 302 auf signin.ebay.<tld>/ws/eBayISAPI.dll?SignIn (seit 2026-07)
+#                Die Zielseite kommt mit HTTP 200 und ~120 KB, ist also weder
+#                per Statuscode noch per Groesse von einer Trefferseite zu
+#                unterscheiden -> Redirect-Kette und URL pruefen.
+#   2. CAPTCHA — /splashui/captcha (Akamai Bot Manager)
+#   3. CHALLENGE — kleine Stoerungsseite "Bitte entschuldigen Sie die Störung"
+# Dazu der Struktur-Check: fehlt jeder Ergebnis-Container, war es keine SRP.
 _CHALLENGE_MARKER = 'entschuldigen'   # DE-Challenge
 _CHALLENGE_SIZE   = 100_000           # Echte Ergebnisseiten sind immer > 100 KB
 
+# Marker fuer eine echte Suchergebnisseite (SRP). Mindestens einer muss vorkommen,
+# sonst haben wir keine Trefferseite gesehen — auch nicht eine mit 0 Treffern.
+_SRP_MARKERS = ('srp-results', 's-card', '"totalItems"', 'srp-controls', 'srp-river')
+
+
+def _is_signin(resp: requests.Response) -> bool:
+    """True wenn die Anfrage auf die eBay-Anmeldung umgeleitet wurde."""
+    urls = [resp.url] + [h.headers.get('Location', '') for h in resp.history]
+    urls += [h.url for h in resp.history]
+    for u in urls:
+        ul = (u or '').lower()
+        if 'signin.ebay.' in ul or 'ebayisapi.dll?signin' in ul:
+            return True
+    return False
+
+
+def _gate_reason(resp: requests.Response) -> str | None:
+    """
+    Gibt einen Klartext-Grund zurueck, wenn eBay statt der Trefferseite eine
+    Sperre/Umleitung geliefert hat — sonst None.
+
+    WICHTIG: Das Ergebnis unterscheidet "wir haben die Seite nicht bekommen"
+    von "die Seite hatte 0 Treffer". Nur bei None darf der Aufrufer eine leere
+    Item-Liste als echte Marktaussage werten.
+    """
+    if _is_signin(resp):
+        return ("eBay verlangt Login fuer Sold-Listings "
+                "(302 -> signin.ebay.de) - anonymes Scraping der verkauften "
+                "Angebote ist nicht mehr moeglich")
+    if 'splashui' in resp.url.lower() or 'captcha' in resp.url.lower():
+        return "eBay Bot-Captcha (splashui/captcha) statt Trefferseite"
+    if len(resp.content) < _CHALLENGE_SIZE and _CHALLENGE_MARKER in resp.text:
+        return "eBay Bot-Challenge-Seite (Akamai) statt Trefferseite"
+    if not any(m in resp.text for m in _SRP_MARKERS):
+        return (f"Keine Suchergebnisseite erhalten "
+                f"(kein SRP-Container, {len(resp.content)} Bytes) - "
+                f"Layout geaendert oder Sperre")
+    return None
+
 
 def _is_challenge(resp: requests.Response) -> bool:
-    """True wenn eBay eine Bot-Challenge-Seite statt Ergebnisse geliefert hat."""
-    if len(resp.content) < _CHALLENGE_SIZE:
-        return _CHALLENGE_MARKER in resp.text or 'splash' in resp.url.lower()
-    return False
+    """
+    Rueckwaertskompatibler Bool-Wrapper um _gate_reason().
+    Neuer Code sollte _gate_reason() nutzen (liefert den Grund im Klartext).
+    """
+    return _gate_reason(resp) is not None
 
 
 # ── Parse-Regexes (eBay-HTML Stand 2026-05) ───────────────────────────────────
@@ -246,6 +310,14 @@ def scrape_sold(
 
     Rueckgabe: (total, items, error_or_None) — identisch zu search_sold().
       items = voller relevanz-gefilterter Sold-Pool (nicht auf limit geschnitten).
+
+    Fehler-Kontrakt (seit v1.5.0):
+      error is None  -> eine echte Trefferseite wurde geparst. items == []
+                        bedeutet dann tatsaechlich "keine Verkaeufe gefunden".
+      error != None  -> es kam KEINE Trefferseite (Login-Gate, Captcha, HTTP-
+                        Fehler, Layout-Aenderung). items == [] ist dann KEINE
+                        Marktaussage und darf nicht als "0 Verkaeufe" gewertet
+                        werden.
     """
     domain = _DOMAINS.get(marketplace.upper(), 'www.ebay.de')
 
@@ -266,11 +338,23 @@ def scrape_sold(
     session = _get_session(domain)
     try:
         resp = session.get(url, params=params, timeout=TIMEOUT)
-        if resp.status_code == 403 or _is_challenge(resp):
-            # Session invalide oder Akamai-Challenge → Session-Reset + 1 Retry
+        # Login-Gate zuerst und OHNE Retry: das ist eine serverseitige Regel, kein
+        # Session-Problem. Ein Retry kostet nur einen weiteren Request (plus
+        # Homepage-Warm-up) gegen eine Seite, die uns ohnehin abweist — bei
+        # Massenlaeufen ueber hunderte Artikel der Unterschied zwischen einem und
+        # drei nutzlosen Treffern pro Artikel. Die Pruefung steht VOR
+        # raise_for_status, weil signin.ebay.de je nach Lauf 200 ODER 403
+        # liefert und ein "HTTP 403" die eigentliche Ursache verschleiern wuerde.
+        if _is_signin(resp):
+            return None, [], f"Scraper: {_gate_reason(resp)}"
+        gate = _gate_reason(resp) if resp.status_code != 403 else '403'
+        if gate is not None:
+            # Session invalide oder Captcha → Session-Reset + 1 Retry.
             _sessions.pop(domain, None)
             session = _get_session(domain)
             resp = session.get(url, params=params, timeout=TIMEOUT)
+            if _is_signin(resp):
+                return None, [], f"Scraper: {_gate_reason(resp)}"
         resp.raise_for_status()
     except requests.HTTPError as e:
         code = e.response.status_code if e.response is not None else '?'
@@ -278,8 +362,11 @@ def scrape_sold(
     except requests.RequestException as e:
         return None, [], f"Scraper Netzwerkfehler: {e}"
 
-    if _is_challenge(resp):
-        return None, [], "Scraper: eBay Bot-Challenge nicht umgehbar (Session invalide)"
+    # Gate-Check NACH dem Retry: ab hier gilt eine leere Item-Liste als echte
+    # Marktaussage, deshalb muss jede Nicht-Trefferseite hier als Fehler raus.
+    gate = _gate_reason(resp)
+    if gate is not None:
+        return None, [], f"Scraper: {gate}"
 
     html  = resp.text
     total = _parse_total(html)
