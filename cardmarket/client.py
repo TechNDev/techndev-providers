@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.0.0
+cardmarket  client.py  v1.0.1
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
+
+CHANGELOG:
+  1.0.1  API-Host auf apiv2.cardmarket.com umgestellt — der alte Host
+         api.cardmarket.com liefert seit der Cardmarket-API-Migration
+         nur noch HTTP 410 (verifiziert 2026-09-16, OAuth1-Creds
+         funktionieren am neuen Host unveraendert)
+  1.0.0  Initial: /account, /productlist, /priceguide, /products, /articles
 
 Endpoints:
   /account                       Auth-Check
@@ -31,9 +38,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
-_BASE = "https://api.cardmarket.com/ws/v2.0/output.json"
+_BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
 
 
