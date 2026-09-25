@@ -1,5 +1,5 @@
 """
-techndev-providers  ebay  v2.2.0
+techndev-providers  ebay  v2.3.0
 ==================================
 eBay Datenprovider fuer TechNDev Tools.
 Gemeinsame Bibliothek fuer amz-einkauf, mydealz-watcher, reseller-profitability,
@@ -73,12 +73,25 @@ Datenmodelle
     .sell_through_rate → sold.total / (sold.total + active.total)
     .ok()         → True wenn mind. eine Seite erfolgreich
 
-Hinweis Sold-Daten
-------------------
-  Verkaufte Angebote werden primaer per HTML-Scraper ermittelt.
-  Marketplace Insights API (buy.marketplace.insights) ist als Backlog
-  in sold._search_sold_api() hinterlegt — Reaktivierung nach Business Approval.
-  Application Growth Check gestellt: 2026-05-28.
+Hinweis Sold-Daten  —  AKTUELL NICHT VERFUEGBAR (Stand 2026-08-03)
+------------------------------------------------------------------
+  eBay hat die verkauften Angebote am 2026-07-23 hinter den Login gestellt:
+  /sch/i.html mit LH_Sold=1 ODER LH_Complete=1 antwortet mit 302 auf
+  signin.ebay.de (.de und .com gleichermassen). Der anonyme HTML-Scraper kann
+  Sold-Daten daher nicht mehr liefern; get_sold_listings() gibt ein SoldResult
+  mit error != None und count == 0 zurueck.
+
+  WICHTIG fuer Aufrufer: sold.count == 0 heisst NICHT "keine Verkaeufe".
+  Immer result.ok() bzw. result.error pruefen, bevor ein leeres Ergebnis als
+  Marktaussage gewertet wird — sonst entstehen stille Null-Datensaetze.
+
+  Die Aktiv-Seite (get_active_listings, Browse-API) ist NICHT betroffen und
+  laeuft unveraendert. get_market_snapshot().ok() ist deshalb weiterhin True,
+  sobald die Aktiv-Seite klappt: fuer die Sold-Seite .sold.error auswerten.
+
+  Weg zurueck: Marketplace Insights API (buy.marketplace.insights), hinterlegt
+  in sold._search_sold_api(). Application Growth Check gestellt 2026-05-28,
+  am 2026-08-03 weiterhin abschlaegig (Token HTTP 400, Scope nicht freigegeben).
 """
 from ._models   import (
     SoldItem, ActiveItem,
@@ -114,7 +127,7 @@ from .analytics import (
     ALL_METRICS, DEFAULT_METRICS,
 )
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 __all__ = [
     # ── Hauptfunktionen (analog amazon_sp) ───────────────────────────────────
