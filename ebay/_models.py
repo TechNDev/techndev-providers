@@ -201,9 +201,32 @@ class ActiveItem:
     buying_options: str
     item_id:        str
     url:            str
+    shipping:       float | None = None    # Versandkosten des Kaeufers; None = unbekannt
+    free_shipping:  bool = False
+    seller:         str = ""                # Verkaeufername — um eigene Angebote auszuschliessen
+
+    @property
+    def total_price(self) -> float | None:
+        """
+        Was der Kaeufer wirklich zahlt: Artikel + Versand.
+
+        DAS ist die Vergleichsgroesse, nicht der Artikelpreis. Auf eBay locken
+        Anbieter regelmaessig mit 6,90 EUR und holen sich ueber 6,99 EUR Porto
+        zurueck — wer nur Artikelpreise vergleicht, haelt sich faelschlich fuer
+        guenstig. Unbekannter Versand -> None, damit er nicht als 0 durchgeht.
+        """
+        if self.price is None:
+            return None
+        if self.free_shipping:
+            return round(self.price, 2)
+        if self.shipping is None:
+            return None
+        return round(self.price + self.shipping, 2)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["total_price"] = self.total_price
+        return d
 
 
 # ══════════════════════════════════════════════════════════════════════════════

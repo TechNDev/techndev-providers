@@ -20,6 +20,8 @@ Oeffentliche API
   from ebay import suggest_category_id, get_item_aspects     # Kategorie + Pflichtfelder
   from ebay import build_inventory_item, build_offer_payload # EbayOfferDraft → API-Bodies
   from ebay import create_offer, publish_offer               # Schreib-Pfad (User-Token)
+  from ebay import build_inventory_item_group                # Variantenangebot
+  from ebay import upload_picture                            # Bild → eBay-URL (EPS)
   from ebay import CatalogProduct, AspectRequirement, EbayOfferDraft
 
 Import-Pattern (Git-Submodul unter providers/)
@@ -105,8 +107,12 @@ from .inventory import (
     build_inventory_item, build_offer_payload,
     create_or_replace_inventory_item, create_offer, publish_offer,
     withdraw_offer, delete_offer, delete_inventory_item,
+    update_offer, create_inventory_location,
     get_business_policies, get_inventory_locations,
+    build_inventory_item_group, create_or_replace_inventory_item_group,
+    publish_offer_by_inventory_item_group, delete_inventory_item_group,
 )
+from .eps import upload_picture, upload_picture_detail
 from .analytics import (
     get_traffic_report  as get_seller_analytics,
     get_seller_standards,
@@ -114,7 +120,7 @@ from .analytics import (
     ALL_METRICS, DEFAULT_METRICS,
 )
 
-__version__ = "2.2.0"
+__version__ = "2.5.0"
 
 __all__ = [
     # ── Hauptfunktionen (analog amazon_sp) ───────────────────────────────────
@@ -141,8 +147,17 @@ __all__ = [
     'withdraw_offer',             # offerId → Listing beenden
     'delete_offer',               # offerId → Offer-Entwurf loeschen
     'delete_inventory_item',      # sku → Inventory-Eintrag loeschen
+    'update_offer',               # offerId + Body → Offer aendern (auch live)
+    'create_inventory_location',  # key + Adresse → Inventory-Location (POST!)
     'get_business_policies',      # → {fulfillment,payment,return}
     'get_inventory_locations',    # → [locations]
+    # ── Variantenangebot (Inventory Item Group) ─────────────────────────────
+    'build_inventory_item_group',            # → Group-Body (rein)
+    'create_or_replace_inventory_item_group',# groupKey + Body → Gruppe anlegen
+    'publish_offer_by_inventory_item_group', # groupKey → EIN Listing mit Auswahl
+    'delete_inventory_item_group',           # groupKey → Klammer loesen
+    'upload_picture',             # Bilddatei → i.ebayimg.com-URL (Trading/EPS)
+    'upload_picture_detail',      # dito, mit Groesse + allen Varianten
     # ── Analytics (User-Token erforderlich) ──────────────────────────────────
     'get_seller_analytics',       # Traffic-Report → TrafficReport
     'get_seller_standards',       # Performance-Level → SellerStandards

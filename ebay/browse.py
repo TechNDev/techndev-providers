@@ -246,6 +246,20 @@ def _parse_items(raw_list: list[dict]) -> list[ActiveItem]:
         except (TypeError, ValueError):
             price = None
 
+        # Versandkosten stehen schon in der Suchantwort — kein Detail-Call noetig.
+        versand, gratis = None, False
+        for so in (raw.get("shippingOptions") or []):
+            sc = so.get("shippingCost") or {}
+            v = sc.get("value")
+            if v is None:
+                continue
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            versand = v if versand is None else min(versand, v)
+            if v == 0.0 or so.get("shippingCostType") == "FREE":
+                gratis = True
         opts = raw.get("buyingOptions") or []
         buying_options = ", ".join(str(x) for x in opts) if isinstance(opts, list) else str(opts or "")
 
@@ -257,5 +271,8 @@ def _parse_items(raw_list: list[dict]) -> list[ActiveItem]:
             buying_options = buying_options,
             item_id        = str(raw.get("itemId") or raw.get("legacyItemId") or ""),
             url            = raw.get("itemWebUrl") or raw.get("itemAffiliateWebUrl") or "",
+            shipping       = versand,
+            free_shipping  = gratis,
+            seller         = str((raw.get("seller") or {}).get("username") or ""),
         ))
     return items

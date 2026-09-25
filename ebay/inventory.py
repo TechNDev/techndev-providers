@@ -36,7 +36,7 @@ import requests
 from ._auth import get_user_token, api_base, SCOPE_INVENTORY, SCOPE_ACCOUNT
 from ._rate import _retry, inventory_limiter
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 TIMEOUT = 30
 
@@ -95,8 +95,10 @@ def _package(draft) -> dict | None:
     return pkg or None
 
 
-def build_offer_payload(draft, policies: dict, merchant_location_key: str) -> dict:
-    """EbayOfferDraft (+ Policy-IDs + Location) → Body fuer createOffer."""
+def build_offer_payload(draft, policies: dict, merchant_location_key: str,
+                        best_offer: bool = False) -> dict:
+    """EbayOfferDraft (+ Policy-IDs + Location) → Body fuer createOffer.
+    best_offer=True aktiviert Preisvorschlag (bestOfferTerms.bestOfferEnabled)."""
     body: dict = {
         "sku":               draft.sku,
         "marketplaceId":     draft.marketplace,
@@ -112,6 +114,8 @@ def build_offer_payload(draft, policies: dict, merchant_location_key: str) -> di
     if policies.get("fulfillment"): lp["fulfillmentPolicyId"] = policies["fulfillment"]
     if policies.get("payment"):     lp["paymentPolicyId"]     = policies["payment"]
     if policies.get("return"):      lp["returnPolicyId"]      = policies["return"]
+    if best_offer:
+        lp["bestOfferTerms"] = {"bestOfferEnabled": True}
     if lp:
         body["listingPolicies"] = lp
     return body
@@ -269,6 +273,53 @@ def get_business_policies(creds: dict, marketplace: str = "EBAY_DE") -> dict:
 
 
 @_retry
+def create_inventory_location(
+    key: str, address: dict, creds: dict, *,
+    name: str | None = None, location_types=("WAREHOUSE",),
+) -> tuple[bool, str | None]:
+    """Legt eine Inventory-Location an. WICHTIG: createInventoryLocation ist POST
+    (nicht PUT wie inventory_item). address = {addressLine1?, city, postalCode,
+    stateOrProvince?, country}. (ok, error)."""
+    inventory_limiter.wait()
+    body = {
+        "location":               {"address": address},
+        "merchantLocationStatus": "ENABLED",
+        "locationTypes":          list(location_types),
+    }
+    if name:
+        body["name"] = name
+    url = f"{api_base(creds.get('env', 'production'))}/sell/inventory/v1/location/{key}"
+    try:
+        resp = requests.post(url, headers=_user_headers(creds, SCOPE_INVENTORY),
+                            data=json.dumps(body), timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        return False, _err(e)
+    except requests.RequestException as e:
+        return False, f"Netzwerkfehler: {e}"
+    return True, None
+
+
+@_retry
+def update_offer(offer_id: str, offer_body: dict, creds: dict) -> tuple[bool, str | None]:
+    """Aendert ein bestehendes (auch veroeffentlichtes) Offer via PUT /offer/{offerId}.
+    offer_body muss die updateOffer-Pflichtfelder enthalten (categoryId, pricingSummary,
+    listingPolicies, availableQuantity, merchantLocationKey, listingDescription). (ok, error)."""
+    inventory_limiter.wait()
+    url = f"{api_base(creds.get('env', 'production'))}/sell/inventory/v1/offer/{offer_id}"
+    try:
+        resp = requests.put(url, headers=_user_headers(creds, SCOPE_INVENTORY,
+                                                       offer_body.get("marketplaceId", "EBAY_DE")),
+                            data=json.dumps(offer_body), timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        return False, _err(e)
+    except requests.RequestException as e:
+        return False, f"Netzwerkfehler: {e}"
+    return True, None
+
+
+@_retry
 def get_inventory_locations(creds: dict) -> tuple[list[dict], str | None]:
     """Liste der Inventory-Locations (merchantLocationKey). (locations, error)."""
     inventory_limiter.wait()
@@ -294,3 +345,119 @@ def _err(e: requests.HTTPError) -> str:
     except Exception:                                    # noqa: BLE001
         pass
     return f"HTTP {code}{detail}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Variantenangebot (Inventory Item Group)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Ein Variantenangebot ist auf eBay KEIN eigener Angebotstyp, sondern eine
+# Klammer um mehrere Inventory-Items:
+#   1. je Variante ein inventory_item (SKU) — traegt Bestand, Bild, Aspects
+#   2. je Variante ein offer (Preis, Policies)   — NICHT einzeln publishen!
+#   3. eine inventory_item_group mit variantSKUs + variesBy
+#   4. publish_offer_by_inventory_item_group -> EIN Listing mit Auswahlfeld
+#
+# Bedingungen, an denen eBay sonst mit 25xxx abbricht:
+#   * Jedes Mitglied fuehrt das variesBy-Aspect mit SEINEM Wert (product.aspects).
+#   * Die Werte sind ueber die Gruppe eindeutig — zwei Varianten mit demselben
+#     Wert sind fuer eBay derselbe Artikel.
+#   * Alle Mitglieder liegen in derselben Kategorie und haben ein Angebot.
+#   * Das Aspect muss in der Kategorie variationsfaehig sein
+#     (Taxonomy: aspectConstraint.aspectEnabledForVariations).
+
+
+def build_inventory_item_group(
+    *, title: str, variant_skus: list[str], varies_by: str,
+    values: list[str] | None = None, description: str = "",
+    image_urls: list[str] | None = None, aspects: dict | None = None,
+    subtitle: str = "", image_varies_by: bool = False,
+) -> dict:
+    """
+    Body fuer PUT inventory_item_group/{groupKey}. Reine Funktion.
+
+    varies_by: Name des variierenden Aspects ("Kompatible Kartengroesse").
+    values:    seine Auspraegungen; None -> eBay leitet sie aus den Items ab.
+    aspects:   Aspects, die fuer ALLE Varianten gelten (Marke, Produktart, ...).
+    """
+    body: dict = {
+        "title": title,
+        "variantSKUs": list(variant_skus),
+        "variesBy": {"specifications": [{"name": varies_by,
+                                         "values": list(values or [])}]},
+    }
+    if not body["variesBy"]["specifications"][0]["values"]:
+        body["variesBy"]["specifications"] = [{"name": varies_by}]
+    if image_varies_by:
+        body["variesBy"]["aspectsImageVariesBy"] = [varies_by]
+    if description:
+        body["description"] = description
+    if subtitle:
+        body["subtitle"] = subtitle
+    if image_urls:
+        body["imageUrls"] = list(image_urls)
+    if aspects:
+        body["aspects"] = {k: (v if isinstance(v, list) else [v])
+                           for k, v in aspects.items() if v}
+    return body
+
+
+@_retry
+def create_or_replace_inventory_item_group(
+    group_key: str, group_body: dict, creds: dict, marketplace: str = "EBAY_DE",
+) -> tuple[bool, str | None]:
+    """PUT inventory_item_group/{groupKey}. Rueckgabe (ok, error)."""
+    inventory_limiter.wait()
+    url = (f"{api_base(creds.get('env', 'production'))}"
+           f"/sell/inventory/v1/inventory_item_group/{group_key}")
+    try:
+        resp = requests.put(url, headers=_user_headers(creds, SCOPE_INVENTORY, marketplace),
+                            data=json.dumps(group_body), timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        return False, _err(e)
+    except requests.RequestException as e:
+        return False, f"Netzwerkfehler: {e}"
+    return True, None
+
+
+@_retry
+def publish_offer_by_inventory_item_group(
+    group_key: str, creds: dict, marketplace: str = "EBAY_DE",
+) -> tuple[str | None, str | None]:
+    """
+    POST offer/publish_by_inventory_item_group — veroeffentlicht die Gruppe als EIN
+    Listing mit Variantenauswahl. Rueckgabe (listingId, error).
+    """
+    inventory_limiter.wait()
+    url = (f"{api_base(creds.get('env', 'production'))}"
+           f"/sell/inventory/v1/offer/publish_by_inventory_item_group")
+    body = {"inventoryItemGroupKey": group_key, "marketplaceId": marketplace}
+    try:
+        resp = requests.post(url, headers=_user_headers(creds, SCOPE_INVENTORY, marketplace),
+                             data=json.dumps(body), timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        return None, _err(e)
+    except requests.RequestException as e:
+        return None, f"Netzwerkfehler: {e}"
+    return (resp.json().get("listingId") or None), None
+
+
+@_retry
+def delete_inventory_item_group(
+    group_key: str, creds: dict, marketplace: str = "EBAY_DE",
+) -> tuple[bool, str | None]:
+    """DELETE inventory_item_group/{groupKey} — loest die Klammer, die Items bleiben."""
+    inventory_limiter.wait()
+    url = (f"{api_base(creds.get('env', 'production'))}"
+           f"/sell/inventory/v1/inventory_item_group/{group_key}")
+    try:
+        resp = requests.delete(url, headers=_user_headers(creds, SCOPE_INVENTORY, marketplace),
+                               timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        return False, _err(e)
+    except requests.RequestException as e:
+        return False, f"Netzwerkfehler: {e}"
+    return True, None
