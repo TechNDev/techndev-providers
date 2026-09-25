@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-icecat  client.py  v1.0.0
+icecat  client.py  v1.2.0
 ===========================
 Icecat REST API Client — Produktdaten per EAN, Brand+MPN oder Icecat-ID.
 Extrahiert aus EAN2JTL (ean2jtl.py v3.15.0).
@@ -17,6 +17,8 @@ Rueckgabe-Format (parse_product) ist identisch zu EAN2JTL:
 
 CHANGELOG
 ---------
+v1.2.0  (2026-09-25)
+  - User-Agent neutral ("icecat-client/<Version>") statt Firmenname.
 v1.1.0  (2026-07-25)
   - app_key (optional): Query-Param fuer Full-Icecat-Zugriff. Rueckwaertskompatibel
     (ohne app_key unveraendertes Verhalten = nur Open-Icecat).
@@ -32,7 +34,7 @@ import re
 
 import requests
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 class IcecatClient:
@@ -64,7 +66,7 @@ class IcecatClient:
         self.app_key  = app_key or None      # noetig fuer Full-Icecat-Inhalte
         self.session  = requests.Session()
         self.session.headers.update({
-            "User-Agent":    "TechNDevIcecatClient/1.0",
+            "User-Agent":    f"icecat-client/{__version__}",   # neutral, kein Firmenname
             "Accept":        "application/json",
             "api-token":     api_token,
             "content-token": content_token,
