@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.0.1
+cardmarket  client.py  v1.1.0
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
 
 CHANGELOG:
+  1.1.0  Orders (Verkaufsseite): get_order(id) mit Produktblock je Artikel,
+         get_orders(actor, state, start) als eine Seite (max 100, HTTP 206 =
+         weitere Seiten) und iter_orders(...) ueber alle Seiten. Fuer den
+         Auftragsimport nach JTL (cardmarket-orders). Nur lesend.
   1.0.1  API-Host auf apiv2.cardmarket.com umgestellt — der alte Host
          api.cardmarket.com liefert seit der Cardmarket-API-Migration
          nur noch HTTP 410 (verifiziert 2026-09-16, OAuth1-Creds
@@ -17,6 +21,8 @@ Endpoints:
   /priceguide                    Bulk: Preis-Guide aller aktiven Produkte (CSV)
   /products/{id}                 Einzel-Detail (priceGuide)
   /articles/{id}                 LIVE: aktuelle Angebote (preis-sortiert)
+  /order/{id}                    Einzel-Order inkl. Produktblock je Artikel
+  /orders/{actor}/{state}/{start} Order-Liste je Status, 100 je Seite (206)
 
 Die beiden Bulk-Dateien werden nur 1x/Tag serverseitig aktualisiert → fuer das
 breite Screening gecacht (Default 24 h). Die Kaufentscheidung nutzt /articles
@@ -38,10 +44,16 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 _BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
+
+
+# MKM-Order-Status (Pfadsegment von /orders/{actor}/{state})
+ORDER_STATES = ("bought", "paid", "sent", "received", "lost", "cancelled")
+ORDER_ACTORS = ("seller", "buyer")
+ORDERS_PAGE = 100
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -121,7 +133,8 @@ class CardmarketClient:
         req = urllib.request.Request(url, headers={"Authorization": self._auth_header("GET", url)})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.status, json.loads(r.read().decode())
+                raw = r.read()                             # 204 (nichts da) = leerer Body
+                return r.status, (json.loads(raw.decode()) if raw.strip() else {})
         except urllib.error.HTTPError as e:
             # 206 (Partial Content, paginierte Artikel) ist OK
             body = e.read().decode("utf-8", "replace")
@@ -222,6 +235,40 @@ class CardmarketClient:
                 "condition":     a.get("condition"),
             }
         return None
+
+    # ── Orders (nur lesend) ─────────────────────────────────────────────────
+    def get_order(self, id_order) -> dict:
+        """Eine Order inkl. Produktblock je Artikel (enName, expansion, rarity,
+        idGame, nr). Die Listen-Endpoints liefern diesen Block NICHT."""
+        return (self._get(f"/order/{int(id_order)}")[1] or {}).get("order", {}) or {}
+
+    def get_orders(self, actor: str = "seller", state: str = "paid",
+                   start: int = 1) -> tuple[list[dict], bool]:
+        """
+        Eine Seite Orders: (orders, more). `start` ist 1-basiert. MKM antwortet
+        mit 206, wenn weitere Seiten folgen, 204/leer wenn nichts da ist.
+        Artikel kommen OHNE Produktblock — fuer Namen get_order() nutzen.
+        """
+        if actor not in ORDER_ACTORS:
+            raise ValueError(f"actor muss {ORDER_ACTORS} sein, nicht {actor!r}")
+        if state not in ORDER_STATES:
+            raise ValueError(f"state muss {ORDER_STATES} sein, nicht {state!r}")
+        status, data = self._get(f"/orders/{actor}/{state}/{int(start)}", timeout=60)
+        orders = (data or {}).get("order") or []
+        if isinstance(orders, dict):                       # MKM: Einzelobjekt statt Liste
+            orders = [orders]
+        return orders, status == 206 and len(orders) >= ORDERS_PAGE
+
+    def iter_orders(self, actor: str = "seller", state: str = "paid",
+                    max_pages: int = 50):
+        """Alle Orders eines Status, seitenweise (Schutz: max_pages)."""
+        start = 1
+        for _ in range(max_pages):
+            orders, more = self.get_orders(actor, state, start)
+            yield from orders
+            if not more:
+                return
+            start += ORDERS_PAGE
 
 
 def _f(v):

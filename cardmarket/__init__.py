@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cardmarket  v1.0.0
+cardmarket  v1.1.0
 ====================
 Provider fuer die Cardmarket-(MKM-)API — Sealed-TCG-Arbitrage (Cardmarket → Amazon).
 
@@ -15,9 +15,15 @@ Oeffentliche API:
   cm.fetch_product_list()              # [{idProduct, Name, Category, Expansion, ...}]
   cm.fetch_price_guide()               # {idProduct: {low, trend, de_pro_low, uvp, ...}}
   cm.get_cheapest_offer(idProduct)     # live guenstigstes Angebot (+ Verkaeufertyp)
+  cm.get_order(idOrder)                # Verkaufs-Order inkl. Produktblock
+  cm.iter_orders("seller", "paid")     # alle bezahlten Orders (seitenweise)
 
 CHANGELOG
 ---------
+v1.1.0  (2026-10-15)
+  - Orders lesen: get_order / get_orders / iter_orders (Auftragsimport JTL).
+  - 204-Antworten (leerer Body) liefern {} statt JSON-Fehler.
+
 v1.0.0  (2026-06-12)
   - Initiales Release: OAuth1-Client, Bulk productlist/priceguide (+24h-Cache),
     get_price_guide/get_cheapest_offer, Config-Auto-Discovery, CLI.
@@ -26,5 +32,5 @@ from __future__ import annotations
 
 from .client import CardmarketClient, load_config
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __all__ = ["CardmarketClient", "load_config"]
