@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.1.0
+cardmarket  client.py  v1.3.0
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
 
 CHANGELOG:
+  1.3.0  Orders schreiben: send_order(id) bestaetigt den Versand (PUT /order/{id},
+         action=send, paid -> sent), set_tracking(id, nr) traegt die
+         Sendungsnummer nach (PUT /order/{id}/tracking, nur im Status sent).
+  1.2.0  Bestand schreiben: add_stock(articles) per POST /stock und
+         change_stock(articles) per PUT /stock (XML-Body, 100er-Pakete, Ergebnis
+         je Artikel); get_stock_article(idArticle) liest einen eigenen Artikel.
+         get_cheapest_offer: neue optionale Filter is_foil, exclude_seller,
+         plain_only, Rueckgabe zusaetzlich id_article; sortiert selbst nach Preis.
+         max_results > 100 blaettert seitenweise (MKM erlaubt max. 100 je Abruf). Dazu lesend get_expansions(idGame),
+         get_singles(idExpansion) (24-h-Cache) und get_product(id) fuer die
+         Zuordnung Name/Edition/Sammlernummer -> idProduct (cardmarket-orders
+         cm_stock.py). _send() fuer alle HTTP-Methoden, _get() nutzt es.
   1.1.0  Orders (Verkaufsseite): get_order(id) mit Produktblock je Artikel,
          get_orders(actor, state, start) als eine Seite (max 100, HTTP 206 =
          weitere Seiten) und iter_orders(...) ueber alle Seiten. Fuer den
@@ -23,6 +35,13 @@ Endpoints:
   /articles/{id}                 LIVE: aktuelle Angebote (preis-sortiert)
   /order/{id}                    Einzel-Order inkl. Produktblock je Artikel
   /orders/{actor}/{state}/{start} Order-Liste je Status, 100 je Seite (206)
+  PUT /order/{id}                Order-Status setzen, hier action=send (SCHREIBT)
+  PUT /order/{id}/tracking       Sendungsnummer setzen (SCHREIBT)
+  /games/{idGame}/expansions     Editionen eines Spiels (gecacht)
+  /expansions/{id}/singles       Einzelkarten einer Edition inkl. number (gecacht)
+  /stock/article/{idArticle}     ein eigener Bestandsartikel
+  POST /stock                    Artikel in den eigenen Bestand einstellen (SCHREIBT)
+  PUT /stock                     eigene Artikel aendern, je idArticle (SCHREIBT)
 
 Die beiden Bulk-Dateien werden nur 1x/Tag serverseitig aktualisiert → fuer das
 breite Screening gecacht (Default 24 h). Die Kaufentscheidung nutzt /articles
@@ -43,8 +62,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from xml.sax.saxutils import escape
 
-__version__ = "1.1.0"
+__version__ = "1.3.0"
 
 _BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
@@ -54,6 +74,13 @@ _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
 ORDER_STATES = ("bought", "paid", "sent", "received", "lost", "cancelled")
 ORDER_ACTORS = ("seller", "buyer")
 ORDERS_PAGE = 100
+ARTICLES_PAGE = 100                                        # MKM: max. 100 Angebote je /articles-Abruf
+
+# Bestand (POST /stock)
+STOCK_CHUNK = 100                                          # MKM: max. 100 Artikel je Request
+CONDITIONS = ("MT", "NM", "EX", "GD", "LP", "PL", "PO")
+STOCK_FIELDS = ("idArticle", "idProduct", "idLanguage", "comments", "count", "price",
+                "condition", "isFoil", "isSigned", "isPlayset")
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -128,22 +155,30 @@ class CardmarketClient:
         parts = [f'realm="{base_url}"'] + [f'{k}="{_enc(v)}"' for k, v in oauth.items()]
         return "OAuth " + ", ".join(parts)
 
-    def _get(self, path: str, timeout: int = 180):
+    def _send(self, method: str, path: str, body: str | None = None, timeout: int = 180):
         url = _BASE + path
-        req = urllib.request.Request(url, headers={"Authorization": self._auth_header("GET", url)})
+        headers = {"Authorization": self._auth_header(method, url)}
+        data = None
+        if body is not None:                               # XML-Body geht NICHT in die Signatur
+            data = body.encode("utf-8")
+            headers["Content-Type"] = "application/xml; charset=utf-8"
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw = r.read()                             # 204 (nichts da) = leerer Body
                 return r.status, (json.loads(raw.decode()) if raw.strip() else {})
         except urllib.error.HTTPError as e:
             # 206 (Partial Content, paginierte Artikel) ist OK
-            body = e.read().decode("utf-8", "replace")
+            text = e.read().decode("utf-8", "replace")
             if e.code == 206:
                 try:
-                    return 206, json.loads(body)
+                    return 206, json.loads(text)
                 except Exception:                          # noqa: BLE001
                     pass
-            raise RuntimeError(f"MKM {path} -> HTTP {e.code}: {body[:160]}") from e
+            raise RuntimeError(f"MKM {method} {path} -> HTTP {e.code}: {text[:160]}") from e
+
+    def _get(self, path: str, timeout: int = 180):
+        return self._send("GET", path, timeout=timeout)
 
     # ── Auth-Check ──────────────────────────────────────────────────────────
     def account(self) -> dict:
@@ -194,7 +229,31 @@ class CardmarketClient:
             }
         return out
 
+    def _cached_json(self, path: str, cache_key: str, force: bool) -> dict:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        cache = self.cache_dir / f"{cache_key}.json"
+        if not force and cache.is_file() and (time.time() - cache.stat().st_mtime) < self.cache_ttl_s:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        data = self._get(path)[1] or {}
+        cache.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return data
+
+    def get_expansions(self, id_game: int = 1, force: bool = False) -> list[dict]:
+        """Editionen eines Spiels: [{idExpansion, enName, abbreviation, ...}]."""
+        return self._cached_json(f"/games/{int(id_game)}/expansions",
+                                 f"expansions_{int(id_game)}", force).get("expansion") or []
+
+    def get_singles(self, id_expansion: int, force: bool = False) -> list[dict]:
+        """Einzelkarten einer Edition: [{idProduct, enName, localization, number,
+        rarity, expansionName, website, ...}]. Varianten heissen „Name (V.2)“."""
+        return self._cached_json(f"/expansions/{int(id_expansion)}/singles",
+                                 f"singles_{int(id_expansion)}", force).get("single") or []
+
     # ── Einzel-Detail / LIVE ────────────────────────────────────────────────
+    def get_product(self, id_product) -> dict:
+        """Produkt inkl. enName, number, expansion, website, priceGuide."""
+        return (self._get(f"/products/{int(id_product)}")[1] or {}).get("product", {}) or {}
+
     def get_price_guide(self, id_product) -> dict:
         pr = (self._get(f"/products/{id_product}")[1] or {}).get("product", {})
         return pr.get("priceGuide", {}) or {}
@@ -202,20 +261,37 @@ class CardmarketClient:
     def get_cheapest_offer(self, id_product, *, commercial_only: bool = False,
                            country: str | None = None, min_count: int = 1,
                            condition: str = "MT", id_language: int | None = None,
-                           max_results: int = 20) -> dict | None:
+                           max_results: int = 20, is_foil: bool | None = None,
+                           exclude_seller: str | None = None,
+                           plain_only: bool = False) -> dict | None:
         """
         LIVE guenstigstes passendes Angebot via /articles (preis-sortiert).
         Filter: optional gewerblich + Land + Mindestmenge + Sprache (id_language —
         Cardmarket fuehrt ein Produkt je Set, die Sprache wird per Filter
-        unterschieden; muss zur Sprache des Quell-EAN passen). Rueckgabe:
-        {price, shipping, count, is_commercial, country, vat, seller, condition}
-        oder None.
+        unterschieden; muss zur Sprache des Quell-EAN passen). Fuer Singles:
+        is_foil (True/False, None = egal), exclude_seller (eigener Username, damit
+        man sich nicht selbst unterbietet), plain_only (ohne signiert/altered/
+        Playset). max_results > 100 blaettert in 100er-Seiten (MKM-Maximum je
+        Abruf), bis ein passendes Angebot gefunden ist — noetig fuer country, das
+        die API nicht serverseitig filtert. Rueckgabe: {price, shipping, count,
+        is_commercial, country, vat, seller, condition, id_article} oder None.
         """
-        path = (f"/articles/{id_product}?minCondition={condition}"
-                f"&start=0&maxResults={max_results}"
-                + (f"&idLanguage={id_language}" if id_language else ""))
-        arts = (self._get(path, timeout=60)[1] or {}).get("article", []) or []
-        for a in arts:                                     # bereits aufsteigend nach Preis
+        page = min(max_results, ARTICLES_PAGE)
+        for start in range(0, max_results, page):
+            path = (f"/articles/{id_product}?minCondition={condition}"
+                    f"&start={start}&maxResults={page}"
+                    + (f"&idLanguage={id_language}" if id_language else "")
+                    + (f"&isFoil={'true' if is_foil else 'false'}" if is_foil is not None else ""))
+            arts = (self._get(path, timeout=60)[1] or {}).get("article", []) or []
+            hit = self._first_offer(arts, commercial_only, country, min_count, is_foil,
+                                    exclude_seller, plain_only)
+            if hit or len(arts) < page:
+                return hit
+        return None
+
+    @staticmethod
+    def _first_offer(arts, commercial_only, country, min_count, is_foil, exclude_seller, plain_only):
+        for a in sorted(arts, key=lambda x: _f(x.get("price")) or float("inf")):
             s = a.get("seller", {}) or {}
             addr = s.get("address", {}) or {}
             if commercial_only and not s.get("isCommercial"):
@@ -224,7 +300,14 @@ class CardmarketClient:
                 continue
             if (a.get("count") or 0) < min_count:
                 continue
+            if is_foil is not None and bool(a.get("isFoil")) != is_foil:
+                continue
+            if exclude_seller and (s.get("username") or "").casefold() == exclude_seller.casefold():
+                continue
+            if plain_only and (a.get("isSigned") or a.get("isAltered") or a.get("isPlayset")):
+                continue
             return {
+                "id_article":    a.get("idArticle"),
                 "price":         _f(a.get("price")),
                 "shipping":      _f(a.get("shippingCost")) or 0.0,
                 "count":         a.get("count"),
@@ -269,6 +352,96 @@ class CardmarketClient:
             if not more:
                 return
             start += ORDERS_PAGE
+
+
+    # ── Orders schreiben ────────────────────────────────────────────────────
+    def send_order(self, id_order) -> dict:
+        """Bestaetigt den Versand (PUT /order/{id}, action=send, SCHREIBT LIVE):
+        paid -> sent, der Kaeufer wird benachrichtigt. Rueckgabe: die Order danach."""
+        body = '<?xml version="1.0" encoding="UTF-8" ?><request><action>send</action></request>'
+        return (self._send("PUT", f"/order/{int(id_order)}", body, timeout=60)[1] or {}).get("order", {}) or {}
+
+    def set_tracking(self, id_order, tracking_number: str) -> dict:
+        """Setzt die Sendungsnummer (PUT /order/{id}/tracking, SCHREIBT LIVE).
+        MKM nimmt sie nur fuer Orders im Status sent an. Rueckgabe: die Order danach."""
+        nr = str(tracking_number).strip()
+        if not nr:
+            raise ValueError("tracking_number ist leer")
+        body = ('<?xml version="1.0" encoding="UTF-8" ?><request>'
+                f"<trackingNumber>{escape(nr)}</trackingNumber></request>")
+        return (self._send("PUT", f"/order/{int(id_order)}/tracking", body, timeout=60)[1] or {}).get("order", {}) or {}
+
+    # ── Bestand schreiben ───────────────────────────────────────────────────
+    def add_stock(self, articles: list[dict]) -> list[dict]:
+        """
+        Stellt Artikel in den eigenen Bestand ein (POST /stock, SCHREIBT LIVE).
+        articles: [{idProduct, count, price, condition, idLanguage, isFoil,
+        isSigned, isPlayset, comments}], gesendet in 100er-Paketen.
+        Rueckgabe in Eingangsreihenfolge, je Artikel MKMs Eintrag aus `inserted`:
+        {success: True, idArticle: {...}} oder {success: False, tried, error}.
+        """
+        out: list[dict] = []
+        for i in range(0, len(articles), STOCK_CHUNK):
+            chunk = articles[i:i + STOCK_CHUNK]
+            _, data = self._send("POST", "/stock", _stock_xml(chunk), timeout=120)
+            ins = (data or {}).get("inserted") or []
+            if isinstance(ins, dict):                      # MKM: Einzelobjekt statt Liste
+                ins = [ins]
+            out.extend(ins)
+            out.extend({"success": False, "error": "keine Rueckmeldung von MKM"}
+                       for _ in range(len(chunk) - len(ins)))
+        return out
+
+    def get_stock_article(self, id_article) -> dict:
+        """Eigener Bestandsartikel: {idArticle, idProduct, language{idLanguage},
+        comments, price, count, condition, isFoil, isSigned, ...}; {} wenn weg."""
+        return (self._get(f"/stock/article/{int(id_article)}", timeout=60)[1] or {}).get("article", {}) or {}
+
+    def change_stock(self, articles: list[dict]) -> list[dict]:
+        """
+        Aendert eigene Artikel (PUT /stock, SCHREIBT LIVE). Je Artikel idArticle
+        plus die Felder wie bei add_stock — sicherheitshalber alle aktuellen Werte
+        mitschicken, nicht nur das geaenderte Feld.
+        Rueckgabe in Eingangsreihenfolge: {success: True, article} oder
+        {success: False, error}.
+        """
+        out: list[dict] = []
+        for i in range(0, len(articles), STOCK_CHUNK):
+            chunk = articles[i:i + STOCK_CHUNK]
+            _, data = self._send("PUT", "/stock", _stock_xml(chunk), timeout=120)
+            data = data or {}
+            ok = data.get("updatedArticles") or []
+            bad = data.get("notUpdatedArticles") or []
+            ok = [ok] if isinstance(ok, dict) else ok
+            bad = [bad] if isinstance(bad, dict) else bad
+            by_id = {int(x["idArticle"]): {"success": True, "article": x} for x in ok if x.get("idArticle")}
+            for x in bad:
+                tid = (x.get("tried") or {}).get("idArticle")
+                if tid:
+                    by_id[int(tid)] = {"success": False, "error": x.get("error") or "abgelehnt"}
+            out.extend(by_id.get(int(a["idArticle"]), {"success": False, "error": "keine Rueckmeldung von MKM"})
+                       for a in chunk)
+        return out
+
+
+def _stock_xml(articles: list[dict]) -> str:
+    parts = ['<?xml version="1.0" encoding="UTF-8" ?>', "<request>"]
+    for a in articles:
+        if a.get("condition") not in CONDITIONS:
+            raise ValueError(f"condition muss {CONDITIONS} sein, nicht {a.get('condition')!r}")
+        parts.append("<article>")
+        for k in STOCK_FIELDS:
+            v = a.get(k)
+            if v is None:
+                continue
+            if isinstance(v, bool):
+                v = "true" if v else "false"
+            elif k == "price":
+                v = f"{float(v):.2f}"
+            parts.append(f"<{k}>{escape(str(v))}</{k}>")
+        parts.append("</article>")
+    parts.append("</request>")
+    return "".join(parts)
 
 
 def _f(v):

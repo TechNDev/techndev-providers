@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cardmarket  v1.1.0
+cardmarket  v1.3.0
 ====================
 Provider fuer die Cardmarket-(MKM-)API — Sealed-TCG-Arbitrage (Cardmarket → Amazon).
 
@@ -17,9 +17,24 @@ Oeffentliche API:
   cm.get_cheapest_offer(idProduct)     # live guenstigstes Angebot (+ Verkaeufertyp)
   cm.get_order(idOrder)                # Verkaufs-Order inkl. Produktblock
   cm.iter_orders("seller", "paid")     # alle bezahlten Orders (seitenweise)
+  cm.send_order(idOrder)               # Versand bestaetigen paid -> sent (SCHREIBT)
+  cm.set_tracking(idOrder, "RR123DE")  # Sendungsnummer, nur bei sent (SCHREIBT)
+  cm.get_expansions() / cm.get_singles(idExpansion) / cm.get_product(id)
+  cm.add_stock([{idProduct, count, price, condition, idLanguage, ...}])  # SCHREIBT
+  cm.get_stock_article(idArticle) / cm.change_stock([{idArticle, ...}])  # PUT SCHREIBT
 
 CHANGELOG
 ---------
+v1.3.0  (2026-10-27)
+  - Orders schreiben: send_order() bestaetigt den Versand (PUT /order/{id},
+    action=send), set_tracking() setzt die Sendungsnummer (PUT /order/{id}/tracking).
+
+v1.2.0  (2026-10-25)
+  - Bestand schreiben: add_stock() per POST /stock, change_stock() per PUT /stock
+    (XML, 100er-Pakete), get_stock_article() liest einen eigenen Artikel.
+  - get_cheapest_offer: optionale Filter is_foil, exclude_seller, plain_only.
+  - Lesend fuer die Zuordnung: get_expansions, get_singles (24-h-Cache), get_product.
+
 v1.1.0  (2026-10-15)
   - Orders lesen: get_order / get_orders / iter_orders (Auftragsimport JTL).
   - 204-Antworten (leerer Body) liefern {} statt JSON-Fehler.
@@ -32,5 +47,5 @@ from __future__ import annotations
 
 from .client import CardmarketClient, load_config
 
-__version__ = "1.1.0"
+__version__ = "1.3.0"
 __all__ = ["CardmarketClient", "load_config"]
