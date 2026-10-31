@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.3.0
+cardmarket  client.py  v1.4.0
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
 
 CHANGELOG:
+  1.4.0  API-Tageslimit: jede Antwort liefert X-Request-Limit-Count/-Max; der zuletzt
+         gesehene Stand liegt in LIMIT (limit_stand()), auch bei HTTP 429.
   1.3.0  Orders schreiben: send_order(id) bestaetigt den Versand (PUT /order/{id},
          action=send, paid -> sent), set_tracking(id, nr) traegt die
          Sendungsnummer nach (PUT /order/{id}/tracking, nur im Status sent).
@@ -64,7 +66,7 @@ import urllib.request
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 _BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
@@ -126,6 +128,29 @@ def _enc(s) -> str:
 
 # ── Client ────────────────────────────────────────────────────────────────────
 
+# ── API-Tageslimit ──────────────────────────────────────────────────────────
+# Cardmarket zählt alle Requests der App je Kalendertag (Reset Mitternacht MEZ) und meldet den
+# Stand in jeder Antwort. Gilt für das ganze Konto, also auch für Requests anderer Programme.
+LIMIT: dict = {"count": None, "max": None, "zeit": None, "erschoepft": False}
+
+
+def _limit_merken(headers, erschoepft: bool = False) -> None:
+    try:
+        n, m = headers.get("X-Request-Limit-Count"), headers.get("X-Request-Limit-Max")
+    except Exception:                                       # noqa: BLE001
+        return
+    if n is None and not erschoepft:
+        return
+    LIMIT.update(count=int(n) if n is not None else LIMIT["count"],
+                 max=int(m) if m is not None else LIMIT["max"],
+                 zeit=time.time(), erschoepft=erschoepft)
+
+
+def limit_stand() -> dict:
+    """Zuletzt gesehener Stand des Tageslimits: {count, max, zeit (epoch), erschoepft}."""
+    return dict(LIMIT)
+
+
 class CardmarketClient:
     def __init__(self, creds: dict, *, cache_dir: str | Path | None = None,
                  cache_ttl_s: int = 24 * 3600):
@@ -165,10 +190,12 @@ class CardmarketClient:
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
+                _limit_merken(r.headers)
                 raw = r.read()                             # 204 (nichts da) = leerer Body
                 return r.status, (json.loads(raw.decode()) if raw.strip() else {})
         except urllib.error.HTTPError as e:
             # 206 (Partial Content, paginierte Artikel) ist OK
+            _limit_merken(e.headers, erschoepft=e.code == 429)
             text = e.read().decode("utf-8", "replace")
             if e.code == 206:
                 try:

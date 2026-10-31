@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cardmarket  v1.3.0
+cardmarket  v1.4.0
 ====================
 Provider fuer die Cardmarket-(MKM-)API — Sealed-TCG-Arbitrage (Cardmarket → Amazon).
 
@@ -25,6 +25,10 @@ Oeffentliche API:
 
 CHANGELOG
 ---------
+v1.4.0  (2026-10-31)
+  - API-Tageslimit: limit_stand() liefert den zuletzt gemeldeten Stand
+    (X-Request-Limit-Count/-Max), auch nach HTTP 429.
+
 v1.3.0  (2026-10-27)
   - Orders schreiben: send_order() bestaetigt den Versand (PUT /order/{id},
     action=send), set_tracking() setzt die Sendungsnummer (PUT /order/{id}/tracking).
@@ -45,7 +49,7 @@ v1.0.0  (2026-06-12)
 """
 from __future__ import annotations
 
-from .client import CardmarketClient, load_config
+from .client import CardmarketClient, limit_stand, load_config
 
-__version__ = "1.3.0"
-__all__ = ["CardmarketClient", "load_config"]
+__version__ = "1.4.0"
+__all__ = ["CardmarketClient", "limit_stand", "load_config"]
