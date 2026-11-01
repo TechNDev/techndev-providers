@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cardmarket  v1.4.0
+cardmarket  v1.5.0
 ====================
 Provider fuer die Cardmarket-(MKM-)API — Sealed-TCG-Arbitrage (Cardmarket → Amazon).
 
@@ -13,7 +13,8 @@ Oeffentliche API:
   cm = CardmarketClient(load_config())
   cm.account()                         # Auth-Check
   cm.fetch_product_list()              # [{idProduct, Name, Category, Expansion, ...}]
-  cm.fetch_price_guide()               # {idProduct: {low, trend, de_pro_low, uvp, ...}}
+  cm.fetch_price_guide()               # {idProduct: {low, trend, avg1/7/30, foil_*, ...}}
+  cm.fetch_stock()                     # eigener Bestand (1 Request)
   cm.get_cheapest_offer(idProduct)     # live guenstigstes Angebot (+ Verkaeufertyp)
   cm.get_order(idOrder)                # Verkaufs-Order inkl. Produktblock
   cm.iter_orders("seller", "paid")     # alle bezahlten Orders (seitenweise)
@@ -25,6 +26,10 @@ Oeffentliche API:
 
 CHANGELOG
 ---------
+v1.5.0  (2026-10-31)
+  - fetch_stock(): eigener Bestand in einem Request (GET /stock/file).
+  - fetch_price_guide(): zusätzlich avg1 und Foil-Werte.
+
 v1.4.0  (2026-10-31)
   - API-Tageslimit: limit_stand() liefert den zuletzt gemeldeten Stand
     (X-Request-Limit-Count/-Max), auch nach HTTP 429.
@@ -51,5 +56,5 @@ from __future__ import annotations
 
 from .client import CardmarketClient, limit_stand, load_config
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __all__ = ["CardmarketClient", "limit_stand", "load_config"]

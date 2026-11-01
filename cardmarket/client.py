@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.4.0
+cardmarket  client.py  v1.5.0
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
 
 CHANGELOG:
+  1.5.0  fetch_stock(): ganzer eigener Bestand in einem Request (GET /stock/file). Price Guide
+         zusätzlich mit avg1 und den Foil-Werten (foil_trend, foil_avg1/7/30, foil_low).
   1.4.0  API-Tageslimit: jede Antwort liefert X-Request-Limit-Count/-Max; der zuletzt
          gesehene Stand liegt in LIMIT (limit_stand()), auch bei HTTP 429.
   1.3.0  Orders schreiben: send_order(id) bestaetigt den Versand (PUT /order/{id},
@@ -66,7 +68,7 @@ import urllib.request
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 _BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
@@ -253,7 +255,38 @@ class CardmarketClient:
                 "uvp":        _f(r.get("Suggested Price")),
                 "avg7":       _f(r.get("AVG7")),
                 "avg30":      _f(r.get("AVG30")),
+                "avg1":       _f(r.get("AVG1")),
+                "foil_low":   _f(r.get("Foil Low")),
+                "foil_trend": _f(r.get("Foil Trend")),
+                "foil_avg1":  _f(r.get("Foil AVG1")),
+                "foil_avg7":  _f(r.get("Foil AVG7")),
+                "foil_avg30": _f(r.get("Foil AVG30")),
             }
+        return out
+
+    # ── eigener Bestand (lesen) ─────────────────────────────────────────────
+    def fetch_stock(self, id_game: int = 1) -> list[dict]:
+        """Ganzer eigener Bestand eines Spiels in EINEM Request (GET /stock/file, gzip-CSV, ';').
+        Je Artikel: idArticle, idProduct, name, expansion, price, idLanguage, condition, foil, signed,
+        altered, comment (= Lagerplatz), amount. Nicht gecacht – immer der aktuelle Stand."""
+        payload = self._get(f"/stock/file?idGame={id_game}")[1] or {}
+        raw = payload.get("stock")
+        if not raw:
+            return []
+        text = gzip.decompress(base64.b64decode(raw)).decode("utf-8", "replace")
+        out = []
+        for r in csv.DictReader(io.StringIO(text), delimiter=";"):
+            try:
+                out.append({
+                    "idArticle": int(r["idArticle"]), "idProduct": int(r["idProduct"]),
+                    "name": r.get("English Name") or "", "expansion": r.get("Exp.") or "",
+                    "price": _f(r.get("Price")), "idLanguage": int(r.get("Language") or 1),
+                    "condition": r.get("Condition") or "", "foil": bool(r.get("Foil?")),
+                    "signed": bool(r.get("Signed?")), "altered": bool(r.get("Altered?")),
+                    "comment": r.get("Comments") or "", "amount": int(r.get("Amount") or 0),
+                })
+            except (KeyError, ValueError):
+                continue
         return out
 
     def _cached_json(self, path: str, cache_key: str, force: bool) -> dict:
