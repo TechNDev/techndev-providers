@@ -23,9 +23,12 @@ Oeffentliche API:
   cm.get_expansions() / cm.get_singles(idExpansion) / cm.get_product(id)
   cm.add_stock([{idProduct, count, price, condition, idLanguage, ...}])  # SCHREIBT
   cm.get_stock_article(idArticle) / cm.change_stock([{idArticle, ...}])  # PUT SCHREIBT
+  cm.remove_stock([{idArticle, count}])  # Exemplare entfernen (DELETE, SCHREIBT)
 
 CHANGELOG
 ---------
+v1.6.0  (2026-11-07)
+  - remove_stock(): Exemplare aus dem eigenen Bestand nehmen (DELETE /stock).
 v1.5.0  (2026-10-31)
   - fetch_stock(): eigener Bestand in einem Request (GET /stock/file).
   - fetch_price_guide(): zusätzlich avg1 und Foil-Werte.
@@ -56,5 +59,5 @@ from __future__ import annotations
 
 from .client import CardmarketClient, limit_stand, load_config
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 __all__ = ["CardmarketClient", "limit_stand", "load_config"]

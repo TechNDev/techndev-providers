@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.5.0
+cardmarket  client.py  v1.6.0
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
 
 CHANGELOG:
+  1.6.0  remove_stock(articles): Exemplare aus dem eigenen Bestand nehmen (DELETE /stock,
+         [{idArticle, count}], 100er-Pakete) – z. B. wenn Karten in ein Paket wandern.
   1.5.0  fetch_stock(): ganzer eigener Bestand in einem Request (GET /stock/file). Price Guide
          zusätzlich mit avg1 und den Foil-Werten (foil_trend, foil_avg1/7/30, foil_low).
   1.4.0  API-Tageslimit: jede Antwort liefert X-Request-Limit-Count/-Max; der zuletzt
@@ -46,6 +48,7 @@ Endpoints:
   /stock/article/{idArticle}     ein eigener Bestandsartikel
   POST /stock                    Artikel in den eigenen Bestand einstellen (SCHREIBT)
   PUT /stock                     eigene Artikel aendern, je idArticle (SCHREIBT)
+  DELETE /stock                  Exemplare aus dem eigenen Bestand nehmen (SCHREIBT)
 
 Die beiden Bulk-Dateien werden nur 1x/Tag serverseitig aktualisiert → fuer das
 breite Screening gecacht (Default 24 h). Die Kaufentscheidung nutzt /articles
@@ -68,7 +71,7 @@ import urllib.request
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 _BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
@@ -480,6 +483,36 @@ class CardmarketClient:
                 if tid:
                     by_id[int(tid)] = {"success": False, "error": x.get("error") or "abgelehnt"}
             out.extend(by_id.get(int(a["idArticle"]), {"success": False, "error": "keine Rueckmeldung von MKM"})
+                       for a in chunk)
+        return out
+
+    def remove_stock(self, articles: list[dict]) -> list[dict]:
+        """
+        Nimmt Exemplare aus dem eigenen Bestand (DELETE /stock, SCHREIBT LIVE).
+        articles: [{idArticle, count}] – count = so viele Exemplare dieses Artikels
+        entfernen (nicht: neue Menge). Gesendet in 100er-Paketen.
+        Rueckgabe in Eingangsreihenfolge: {success: True|False, idArticle, count, error?}.
+        """
+        out: list[dict] = []
+        for i in range(0, len(articles), STOCK_CHUNK):
+            chunk = articles[i:i + STOCK_CHUNK]
+            body = ['<?xml version="1.0" encoding="UTF-8" ?>', "<request>"]
+            for a in chunk:
+                body.append(f"<article><idArticle>{int(a['idArticle'])}</idArticle>"
+                            f"<count>{int(a.get('count') or 1)}</count></article>")
+            body.append("</request>")
+            _, data = self._send("DELETE", "/stock", "".join(body), timeout=120)
+            res = (data or {}).get("deleted") or []
+            res = [res] if isinstance(res, dict) else res
+            by_id = {}
+            for x in res:
+                aid = x.get("idArticle")
+                aid = aid.get("idArticle") if isinstance(aid, dict) else aid
+                if aid:
+                    by_id[int(aid)] = {"success": bool(x.get("success", True)), "idArticle": int(aid),
+                                       "count": x.get("count"), "error": x.get("message") or x.get("error")}
+            out.extend(by_id.get(int(a["idArticle"]), {"success": False, "idArticle": int(a["idArticle"]),
+                                                       "error": "keine Rueckmeldung von MKM"})
                        for a in chunk)
         return out
 
