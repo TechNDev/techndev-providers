@@ -245,3 +245,48 @@ v1.0-Resolver-Layer auf:
 - **Stapeln MwSt-Aktion × Cashback unklar** (Händler stornieren Cashback auf stark
   rabattierte Aktionsware oft) — nicht automatisch addieren.
 - „viele Artikel deiner Wahl" → MwSt-Aktion ist produktspezifisch, nicht pauschal.
+
+---
+
+## 🔵 ebay — Trading-API (XML) → Modernized APIs (Wiedervorlage 11.12.2026)
+
+**Anlass:** eBay hat am 27.10.2026 die „Modernized APIs“ (REST + GraphQL) als GA
+gemeldet. Die Trading-API (XML über `/ws/api.dll`) soll langfristig abgelöst
+werden. **Kein Abschaltdatum** für die Trading-API insgesamt und auch keins für
+die drei Aufrufe, die wir nutzen. Wir haben **bewusst nicht umgestellt**
+(Entscheidung 27.10.2026), deshalb nur Wiedervorlage.
+
+Übergreifend: betrifft techndev-providers, jtl-bestandsabgleich und kleinanzeigen-poster.
+
+### Restliche XML-Stellen und Ersatz laut Migration Guide
+
+| Stelle | XML-Aufruf | Ersatz |
+|---|---|---|
+| `jtl-bestandsabgleich/bestandsabgleich.py`, `ebay_aktive.py` | `GetMyeBaySelling` | Listing API `sellerListingSearch` (GraphQL, Filter u. a. `skus`, `listingIds`) |
+| `kleinanzeigen-poster/sources/ebay.py` | `GetItem` | Listing API `sellerListings` (vorerst 1 Angebot pro Abfrage) |
+| `ebay/eps.py` (hier, in allen 4 Submodul-Kopien) | `UploadSiteHostedPictures` | Media API `createImageFromFile` / `createImageFromUrl` (REST) |
+
+Alles andere (Inventory, Browse, Catalog, Taxonomy, Finances, Analytics,
+Fulfillment) ist schon REST und nicht betroffen.
+
+### Offene Kernfrage (vor jedem Umbau klären)
+
+Liefert `sellerListingSearch` auch Angebote, die **per Trading-API (JTL eazyAuction)
+eingestellt** wurden? Der Migration Guide sagt dazu nichts. Wenn nein, bleiben
+`GetMyeBaySelling` und `GetItem`, bis eBay oder JTL das ändern.
+→ Test: `sellerListingSearch` mit ein paar echten JTL-SKUs.
+
+### Mögliche Gewinne
+
+- Bestandsabgleich gezielt per SKU-Filter statt Komplett-Pagination.
+- `createImageFromUrl` statt Multipart-XML-Upload. Hinweis: EPS-URLs ohne
+  Angebot verfallen nach 30 Tagen, `ExtendSiteHostedPictures` ist seit 07/2025 abgeschaltet.
+- Neu als REST: Message API, Feedback API und Notification API (Push).
+  Ideen: Bewertungen automatisch abgeben, Nachrichten-Eingang im Cockpit.
+
+### Bei der Wiedervorlage prüfen
+
+- API-Status/Decommission-Seite: gibt es jetzt Abschaltdaten für
+  `GetMyeBaySelling`, `GetItem` oder `UploadSiteHostedPictures`?
+- Doku: https://developer.ebay.com/develop/guides/sell/modern-apis-migration-guide ·
+  https://developer.ebay.com/develop/api/sell/listing
