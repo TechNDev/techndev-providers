@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-cardmarket  client.py  v1.6.0
+cardmarket  client.py  v1.7.0
 ===============================
 MKM-API-Client: OAuth1.0a (HMAC-SHA1, Dedicated-App), urllib, kein SDK.
 
 CHANGELOG:
+  1.7.0  GET /stock/file prozessuebergreifend nur EIN Abruf zugleich (Dateisperre im Temp-Ordner):
+         Cardmarket antwortet sonst mit HTTP 429, wenn zwei Programme gleichzeitig den Bestand
+         holen (Inventar + Preisbot + Nachtlauf). HTTP 429 → bis zu 3 Wiederholungen (10/30/60 s),
+         ausser das Tageslimit ist voll. Neu: stock_file_raw(id_game, sealed) = rohe CSV (auch
+         Sealed, isSealed=true) und stock_articles(ids, massen_ab=50) = mehrere eigene Artikel in
+         der Form von GET /stock/article, ab massen_ab per EINEM /stock/file statt GET je Artikel.
   1.6.0  remove_stock(articles): Exemplare aus dem eigenen Bestand nehmen (DELETE /stock,
          [{idArticle, count}], 100er-Pakete) – z. B. wenn Karten in ein Paket wandern.
   1.5.0  fetch_stock(): ganzer eigener Bestand in einem Request (GET /stock/file). Price Guide
@@ -63,7 +69,9 @@ import hashlib
 import hmac
 import io
 import json
+import contextlib
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -71,7 +79,7 @@ import urllib.request
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 _BASE = "https://apiv2.cardmarket.com/ws/v2.0/output.json"
 _REQUIRED = ("app_token", "app_secret", "access_token", "access_secret")
@@ -84,6 +92,13 @@ ORDERS_PAGE = 100
 ARTICLES_PAGE = 100                                        # MKM: max. 100 Angebote je /articles-Abruf
 
 # Bestand (POST /stock)
+# GET /stock/file: Cardmarket erlaubt je Konto nur einen Abruf zugleich (sonst HTTP 429). Die Sperre gilt fuer alle
+# Prozesse auf diesem Rechner (cardmarket-orders, tnt-tcg-tool, CLI-Laeufe), nicht nur fuer Threads eines Programms.
+STOCK_FILE_SPERRE = Path(tempfile.gettempdir()) / "techndev_cardmarket_stock_file.lock"
+STOCK_FILE_WARTEN_S = 900                                  # so lange auf einen laufenden Abruf warten
+STOCK_FILE_429_PAUSEN = (10, 30, 60)                       # Wiederholungen nach HTTP 429 (Sekunden)
+MASSEN_AB = 50                                             # stock_articles: ab so vielen IDs ein /stock/file
+
 STOCK_CHUNK = 100                                          # MKM: max. 100 Artikel je Request
 CONDITIONS = ("MT", "NM", "EX", "GD", "LP", "PL", "PO")
 STOCK_FIELDS = ("idArticle", "idProduct", "idLanguage", "comments", "count", "price",
@@ -149,6 +164,62 @@ def _limit_merken(headers, erschoepft: bool = False) -> None:
     LIMIT.update(count=int(n) if n is not None else LIMIT["count"],
                  max=int(m) if m is not None else LIMIT["max"],
                  zeit=time.time(), erschoepft=erschoepft)
+
+
+def _tageslimit_voll() -> bool:
+    n, m = LIMIT.get("count"), LIMIT.get("max")
+    return bool(n is not None and m and n >= m)
+
+
+@contextlib.contextmanager
+def stock_file_sperre(warten_s: float = STOCK_FILE_WARTEN_S, pfad: Path | None = None):
+    """Prozessuebergreifende Sperre um GET /stock/file (Windows: msvcrt, sonst fcntl). Wartet bis warten_s,
+    dann TimeoutError. Jeder Aufruf oeffnet die Datei neu → schuetzt auch Threads im selben Prozess."""
+    pfad = Path(pfad or STOCK_FILE_SPERRE)
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    f = open(pfad, "a+b")
+    ende = time.monotonic() + warten_s
+    gesperrt = False
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                gesperrt = True
+                break
+            except OSError:
+                if time.monotonic() >= ende:
+                    raise TimeoutError(f"/stock/file: seit {warten_s:.0f} s laeuft ein anderer Abruf ({pfad})")
+                time.sleep(0.5)
+        yield
+    finally:
+        if gesperrt:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        f.close()
+
+
+def stock_zeile_als_artikel(a: dict) -> dict:
+    """Zeile aus fetch_stock() in der Form von GET /stock/article. isPlayset fehlt in /stock/file → Schluessel
+    fehlt hier; `_aus_datei` markiert die Herkunft (beim PUT isPlayset weglassen statt „false“ senden)."""
+    return {"idArticle": int(a["idArticle"]), "idProduct": int(a.get("idProduct") or 0),
+            "language": {"idLanguage": int(a.get("idLanguage") or 1)}, "comments": a.get("comment") or "",
+            "count": int(a.get("amount") or 0), "price": a.get("price"), "condition": a.get("condition"),
+            "isFoil": bool(a.get("foil")), "isSigned": bool(a.get("signed")), "isAltered": bool(a.get("altered")),
+            "_aus_datei": True}
 
 
 def limit_stand() -> dict:
@@ -268,15 +339,34 @@ class CardmarketClient:
         return out
 
     # ── eigener Bestand (lesen) ─────────────────────────────────────────────
+    def stock_file_raw(self, id_game: int = 1, sealed: bool = False,
+                       warten_s: float = STOCK_FILE_WARTEN_S) -> bytes:
+        """Ganzer eigener Bestand eines Spiels als rohe, entpackte CSV (';', alle Spalten) in EINEM Request.
+        sealed=True → nur Sealed (isSealed=true; ohne liefert Cardmarket nur Singles). Prozessuebergreifend nur
+        ein Abruf zugleich (stock_file_sperre); HTTP 429 → Wiederholung nach STOCK_FILE_429_PAUSEN, ausser das
+        Tageslimit ist voll. Leerer Bestand → b''."""
+        path = f"/stock/file?idGame={int(id_game)}" + ("&isSealed=true" if sealed else "")
+        with stock_file_sperre(warten_s):
+            for pause in (*STOCK_FILE_429_PAUSEN, None):
+                try:
+                    payload = self._get(path)[1] or {}
+                    break
+                except RuntimeError as e:
+                    if pause is None or "HTTP 429" not in str(e) or _tageslimit_voll():
+                        raise
+                    time.sleep(pause)
+        raw = payload.get("stock")
+        return gzip.decompress(base64.b64decode(raw)) if raw else b""
+
     def fetch_stock(self, id_game: int = 1) -> list[dict]:
         """Ganzer eigener Bestand eines Spiels in EINEM Request (GET /stock/file, gzip-CSV, ';').
         Je Artikel: idArticle, idProduct, name, expansion, price, idLanguage, condition, foil, signed,
-        altered, comment (= Lagerplatz), amount. Nicht gecacht – immer der aktuelle Stand."""
-        payload = self._get(f"/stock/file?idGame={id_game}")[1] or {}
-        raw = payload.get("stock")
-        if not raw:
+        altered, comment (= Lagerplatz), amount. Nicht gecacht – immer der aktuelle Stand.
+        Sperre + 429-Wiederholung wie stock_file_raw()."""
+        roh = self.stock_file_raw(id_game)
+        if not roh:
             return []
-        text = gzip.decompress(base64.b64decode(raw)).decode("utf-8", "replace")
+        text = roh.decode("utf-8", "replace")
         out = []
         for r in csv.DictReader(io.StringIO(text), delimiter=";"):
             try:
@@ -459,6 +549,23 @@ class CardmarketClient:
         """Eigener Bestandsartikel: {idArticle, idProduct, language{idLanguage},
         comments, price, count, condition, isFoil, isSigned, ...}; {} wenn weg."""
         return (self._get(f"/stock/article/{int(id_article)}", timeout=60)[1] or {}).get("article", {}) or {}
+
+    def stock_articles(self, ids, id_game: int = 1, massen_ab: int = MASSEN_AB) -> dict[int, dict]:
+        """Mehrere eigene Artikel live lesen → {idArticle: Artikel wie GET /stock/article}; verkaufte/weg fehlen.
+        Ab massen_ab IDs EIN /stock/file (Artikel dann ohne isPlayset, mit `_aus_datei`), darunter GET je Artikel."""
+        ids = sorted({int(i) for i in ids if i})
+        if not ids:
+            return {}
+        if len(ids) >= massen_ab:
+            gesucht = set(ids)
+            return {int(a["idArticle"]): stock_zeile_als_artikel(a) for a in self.fetch_stock(id_game)
+                    if int(a["idArticle"]) in gesucht}
+        out = {}
+        for i in ids:
+            art = self.get_stock_article(i)
+            if art:
+                out[i] = art
+        return out
 
     def change_stock(self, articles: list[dict]) -> list[dict]:
         """

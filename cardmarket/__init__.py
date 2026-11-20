@@ -24,9 +24,15 @@ Oeffentliche API:
   cm.add_stock([{idProduct, count, price, condition, idLanguage, ...}])  # SCHREIBT
   cm.get_stock_article(idArticle) / cm.change_stock([{idArticle, ...}])  # PUT SCHREIBT
   cm.remove_stock([{idArticle, count}])  # Exemplare entfernen (DELETE, SCHREIBT)
+  cm.stock_file_raw(idGame, sealed=False) # rohe Bestands-CSV (1 Request, Sperre + 429-Wiederholung)
+  cm.stock_articles([idArticle, ...])     # mehrere eigene Artikel; ab 50 IDs EIN /stock/file
 
 CHANGELOG
 ---------
+v1.7.0  (2026-11-18)
+  - GET /stock/file prozessuebergreifend nur ein Abruf zugleich (stock_file_sperre,
+    Dateisperre im Temp-Ordner); HTTP 429 → bis zu 3 Wiederholungen (nicht bei vollem
+    Tageslimit). Neu: stock_file_raw(), stock_articles(), stock_zeile_als_artikel().
 v1.6.0  (2026-11-07)
   - remove_stock(): Exemplare aus dem eigenen Bestand nehmen (DELETE /stock).
 v1.5.0  (2026-10-31)
@@ -57,7 +63,8 @@ v1.0.0  (2026-06-12)
 """
 from __future__ import annotations
 
-from .client import CardmarketClient, limit_stand, load_config
+from .client import (CardmarketClient, limit_stand, load_config, stock_file_sperre,  # noqa: F401
+                     stock_zeile_als_artikel)
 
-__version__ = "1.6.0"
-__all__ = ["CardmarketClient", "limit_stand", "load_config"]
+__version__ = "1.7.0"
+__all__ = ["CardmarketClient", "limit_stand", "load_config", "stock_file_sperre", "stock_zeile_als_artikel"]
